@@ -1,0 +1,60 @@
+;     File created by MakeZ80Source on Mon Sep 17 16:25:01 EDT 2018 from:
+;     C:\Users\admin\Dropbox\Resources\CPM\CurrentOS\8080\stdHeader.asm
+; stdHeader.Z80
+; standard equates for use by CP/M
+ 
+; 2019-03-02 Removed any unused constants
+; 2017-03-02 Refactored the CP/M Suite
+ 
+ 
+TRUE			EQU		-1			; Not false
+FALSE			EQU		0000H
+LO_NIBBLE_MASK	EQU		0FH			; Mask used to obtain the bytes low four bits
+
+BYTE			EQU		1			; Number of bytes for "byte" type
+WORD			EQU		2			; Number of bytes for "word" type
+
+
+ASCII_MASK		EQU		7FH			; ASCII mask 7 bits
+EndOfMessage	EQU		00H
+
+CTRL_C			EQU		03H			; ETX
+CTRL_E			EQU		05H			; Physical EOL
+CTRL_H			EQU		08H			; Backspace
+CTRL_L			EQU		0CH			; FF - Form feed
+CTRL_P			EQU		10H			; Print toggle
+CTRL_R			EQU		12H			; Repeat line
+CTRL_S			EQU		13H			; X-OFF stop/start screen
+CTRL_U			EQU		15H			; Line delete
+CTRL_X			EQU		18H			; Logical line delete
+CTRL_Z			EQU		1AH			; End of file
+
+TAB				EQU		09H			; Tab
+LF				EQU		0AH			; Line Feed
+CR				EQU		0DH			; Carriage Return
+SPACE			EQU		20H			; Space
+HASH_TAG		EQU		23H			; Sharp sign #
+DOLLAR			EQU		24H			; Dollar Sign
+PERCENT			EQU		25H			; Percent Sign
+ASTERISK		EQU		2AH			; Asterisk *
+PERIOD			EQU		2EH			; Period
+ASCII_ZERO		EQU		30H			; zero
+COLON			EQU		3AH			; Colon
+
+SEMICOLON		EQU		3BH			; Semi Colon
+LESS_THAN		EQU		3CH			; Less Than <
+EQUAL_SIGN		EQU		3DH			; Equal Sign
+GREATER_THAN	EQU		3EH			; Greater Than >
+QMARK			EQU		3FH			; Question Mark
+UNDER_SCORE		EQU		5FH			; under score _
+LEFT_ARROW		EQU		5FH			; Left Arrow ?
+RUBOUT			EQU		7FH			; Delete Key
+
+
+ASCII_A			EQU		'A'
+ASCII_C			EQU		'C'
+ASCII_M			EQU		'M' 
+ASCII_O			EQU		'O' 
+ASCII_Y			EQU		'Y'
+CARET			EQU		'^'
+

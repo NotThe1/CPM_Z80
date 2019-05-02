@@ -1,0 +1,1321 @@
+;		File created by MakeZ80Source on Tue Sep 18 14:13:13 EDT 2018 from:
+;		C:\Users\admin\Dropbox\Resources\CPM\CurrentOS\8080\CCP.asm
+
+; CCP.Z80
+;
+; 2019-04-23 FixedCommand Tail count Error [1.0.1]
+; 2019-03-03 Fixed UserCommand not putting 'COM' in Token1
+; 2019-03-02 Version 1.0
+; 2019-03-02 Refactored constants and removed header files
+; 2019-03-01 Finished refactor to Z80 idiom
+; 2019-02-19 Started to refactor to Z80 idiom
+
+; 2017-03-02 Refactored the CP/M Suite
+; 2014-01-16
+; 2014-05-01  :  Frank Martyn
+ 
+; replace systemFile with fcbSystemFileIndex
+ 
+	$Include ./stdHeader.Z80
+	$Include ./osHeader.Z80
+	DollarInclude ./diskHeader.Z80
+
+BDOS					EQU		0005H		; BDOS Vector in Page 00000	
+ 
+cpmRecordSize			EQU		080H			; (128) record size that CP/M uses
+fcbSystemFileIndex		EQU		0AH			; extent number field index
+FILE_NAME_SIZE			EQU		08H			; Max size of file Name 
+FILE_TYPE_SIZE			EQU		03H			; Max size of file Type
+
+;------------------- BDOS System Call Equates --------------------------
+fConsoleIn			EQU		01H			; Console Input
+fConsoleOut			EQU		02H			; Console Output
+fPrintString		EQU		09H			; Print String
+fReadString			EQU		0AH			; Read Console String
+fGetConsoleStatus	EQU		0BH			; Get Console Status
+fGetVersion			EQU		0CH			; Return Version Number
+fResetSystem		EQU		0DH			; Reset Disk System
+fSelectDisk			EQU		0EH			; Select Disk
+fOpenFile			EQU		0FH			; Open File
+fCloseFile			EQU		10H			; Close File
+fSearchFirst		EQU		11H			; Search For First
+fSearchNext			EQU		12H			; Search for Next
+fDeleteFile			EQU		13H			; Delete File
+fReadSeq			EQU		14H			; Read Sequential
+fWriteSeq			EQU		15H			; Write Sequential
+fMakeFile			EQU		16H			; Make File
+fRenameFile			EQU		17H			; Rename File
+fGetLoginVector		EQU		18H			; Return Login Vector
+fGetCurrentDisk		EQU		19H			; Return Current Disk
+fSetDMA				EQU		1AH			; Set DMA address
+fGetSetUserNumber	EQU		20H			; Set/Get User Code
+;-----------------------------------------------------------------------
+
+					ORG	CCPEntry
+CcpBoundary			EQU	$
+;========================== CCP Entry ======================================;
+
+;	JP		CcpStart						;start CCP with possible initial command
+;*****************************************************************
+;enter here from boot loader
+; On Entry	C(HiNibble) = User Number
+;			C(LoNibble) = Disk (0=A, 1=B...F=P)
+CcpStart:
+	LD		SP,Stack					; Set CCP's Stack
+	PUSH	BC							; Save Disk Number
+	LD		E,C							; Get User Number
+	SRL		E
+	SRL		E							; Move user number
+	SRL		E							;  to Lo Nibble
+	SRL		E
+	CALL	SetUser						; Set initial User
+; Initialize will completely reset the disk file system
+	CALL	Initialize					; A = 0FFH if Submit file found
+	LD		(submitFlag),A				; Save return value in Flag
+	POP		BC							; Recall disk number
+	LD		A,C							; Put into Acc
+	AND		LO_NIBBLE_MASK				; Remove User Number
+	LD		(Pg0CurentDisk),A			; Puts disk number into Page 0
+	CALL	SelectDisk					; Set default Disk From Acc
+	LD		A,(commandLength)			; check for initial command
+	OR		A							; See if there is a Command
+	JR		NZ,CcpParseCommand			;  Skip if yes
+ccpMainEntry:
+	LD		SP,Stack					; (re)Establish CCP's Stack
+	CALL	PrintCrLf						; Send CRLF to the Console
+	CALL	GetSelectedDrive			; Get current disk number
+	ADD		A,ASCII_A					; Make ASCII form of Drive
+	CALL	PrintCharInA					; Send Drive letter to console
+	LD		A,GREATER_THAN				; Load '>'
+	CALL	PrintCharInA					; Send to Console
+	CALL	ReadCommand					; Command Buffer filled, Pointer set
+
+CcpParseCommand:
+	LD		DE,DMABuffer				; Default in page 0
+	CALL	SetDMA						; Set the DMA address
+	CALL	GetSelectedDrive			; Get current drive
+	LD		(currentDisk),A				; Save
+	CALL	ParseToken1					; Get first token in command buffer
+	CALL	NZ,CommandError				; The name must be unambiguous
+	LD		A,(selectedDisk)			; Get the Disk:
+	OR		A							; If not default,
+	JP		NZ,ccpUserCommand			;   must be user CMD
+
+	CALL	IntrinsicFunction			; Get CMD index into ACC
+	LD		HL,builtInCMDVector			; Base of Vector
+	LD		E,A
+	LD		D,0							; Index in DE
+	ADD		HL,DE
+	ADD		HL,DE						; Vector is a word, need 2 ADDs
+	LD		A,(HL)						; Pointing at Address
+	INC		HL
+	LD		H,(HL)
+	LD		L,A							; Get address to HL
+	JP		(HL)						;  Go to the Function
+
+;------------------------------ Read Command -------------------------------;
+																			;
+ ;read the next command into the command buffer								;
+ ;check for submit file														;
+ReadCommand:																;
+	LD		A,(submitFlag)				; Get the Submit File Flag			;
+	OR		A							; Is it Set ?						;
+	JR		Z,NotSubmitFile				;  skip if not						;
+; scanning a submit file change drives to open and read the file			;
+	LD		A,(currentDisk)				; Get current disk					;
+	OR		A							; Is it default ?					;
+	LD		A,0							; Prepare to set Disk A				;
+	CALL	NZ,SelectDisk				; Select it if needed				;
+; have to open again in case xsub present									;
+	LD		DE,submitFCB				; Point at the Submits's FCB		;
+	CALL	OpenFile					; Open it							;
+	JR		Z,NotSubmitFile				; Skip if no submit file present	;
+	LD		A,(submitRC)				; Get Number of records in file		;
+	DEC		A								; read last record(s) first		;
+	LD		(submitCR),A				; current record to read			;
+	LD		DE,submitFCB				; Point at the Submits's FCB		;
+	CALL	DiskRead					; Read from back to front			;
+	JR		NZ,NotSubmitFile			; Skip EOF ??						;
+																			;
+; disk read is OK, transfer to commandBuffer								;
+	LD		HL,DMABuffer				; From								;
+	LD		DE,commandLength			; TO								;
+	LD		BC,cpmRecordSize			; For this many bytes				;
+	LDIR								; Move to command buffer			;
+																			;
+; line is transferred, close the file with a deleted record					;
+	LD		HL,submitFWF				; Point at the WriteFileFlag		;
+	RES		7,(HL)				; Clear the WriteFileFlag					;
+;	LD		HL,submitFWF				; Bit 7 is FileWriteFlag			;
+;	LD		(HL),0															;
+;	INC		HL																;
+	LD		HL,submitRC					; Point at FCB record Count			;
+	DEC		M							; Make it one less record			;
+	LD		DE,submitFCB				; Point at the Submits's FCB		;
+	CALL	CloseFile					; Close it							;
+	JR		Z,NotSubmitFile				; Skip if not clean close			;
+; CloseFile went ok, return to original drive								;
+	LD		A,(currentDisk)				; Get the current disk				;
+	OR		A							; Is it the default disk ?			;
+	CALL	NZ,SelectDisk				;  no, then go select it			;
+; print to the 00															;
+	LD		HL,commandBuffer			; Point at the command buffer		;
+	CALL	PrintStringNull				; Display it on the Console			;
+	CALL	CheckForConsoleChar			; User input a character ?			;
+	JR		Z,NoRead					;  skip if not						;
+	CALL	DeleteSubmitFile			; Remove file and reset submit flag ;
+	JP		ccpMainEntry				; Start a new CCP session			;
+;   ---		------------				;-----------------------------------;
+NotSubmitFile:																;
+	CALL	DeleteSubmitFile			; Delete any submit file			;
+	CALL	SaveUserAndDisk				; Save User & Disk to page 0		;
+	LD		DE,commandMaxLength			; Point to Start of Buffer			;
+	LD		C,fReadString				; Load Function Number				;
+	CALL	BDOS						;  and let BDOS do its work			;
+	CALL	SetPage0CurDisk				; No Cntl C, so restore Pg0CurentDis;
+																			;
+NoRead:																		;
+; set the last character to zero for later scans							;
+	LD		HL,commandLength			; Point to length of command		;
+	LD		B,(HL)						; Put it into B						;
+UpCaseLoop:																	;
+	INC		HL							; Point at next byte in buffer		;
+	LD		A,(HL)						; Get the Character					;
+	CALL	UpCase						; If between a-z, up-case it		;
+	LD		(HL),A						; Replace character					;
+	DJNZ	UpCaseLoop					; go thru all of the CMD buffer		;
+;end of scan, h,l address end of command									;
+;ReadCommand2:																;
+	INC		HL							; Point at last char + 1			;
+	LD		(HL),B						; Stuff Zero to terminate the CMD   ;
+	LD		HL,commandBuffer			; go back to start of com			;
+	LD		(commandBufferPointer),HL	; Place in current CMD address		;
+	RET																		;
+;------------------------------ Read Command -------------------------------;
+;--------------------------------- UpCase ----------------------------------;
+;convert character in register A (a to z) to upper case						;
+UpCase:																		;
+	CP		061H															;
+	RET		C							; Return if below lower case 'a'	;
+	CP		07BH															;
+	RET		NC							; Return if above lower case 'z'	;
+	AND		05FH						; Drop bit 5/ makes q->Q etc		;
+	RET																		;
+;--------------------------------- UpCase ----------------------------------;
+;---------------------------- Delete SubmitFile ----------------------------;
+;delete the submit file, and set submit flag to false						;
+DeleteSubmitFile:															;
+	LD		HL,submitFlag				; Point at Submit flag				;
+	LD		A,(HL)						; Get the Flag						;
+	OR		A							; Is it Set ?						;
+	RET		Z							;  return if not set				;
+	LD		(HL),0						; Clear Flag						;
+	XOR		A							; Drive 0 = A:						;
+	CALL	SelectDisk					; Select drive						;
+	LD		DE,submitFCB				; Load the submits FCB				;
+	CALL	DeleteFile					; Go delete it						;
+	LD		A,(currentDisk)				; Determine the current disk		;
+	JP		SelectDisk					; Reselect back to original drive   ;
+;---------------------------- Delete SubmitFile ----------------------------;
+;-------------------------------- Save User --------------------------------;
+;save user#/disk# before possible ^c or transient							;
+SaveUserAndDisk:															;
+	CALL	GetUser						; Get the user number into Acc		;
+	ADD		A,A																;
+	ADD		A,A																;
+	ADD		A,A																;
+	ADD		A,A							; Move user to Hi Nibble			;
+	LD		HL,currentDisk				; Current disk (Lo Nibble)			;
+	OR		M							; Acc -> User & Disk				;
+	LD		(Pg0CurentDisk),A			; Stored in Page0 for later			;
+	RET																		;
+;-------------------------------- Save User --------------------------------;
+;------------------------- Set Page 0 Current Disk -------------------------;
+;set Pg0CurentDisk to current disk											;
+SetPage0CurDisk:															;
+	LD			A,(currentDisk)			; Get CCP's current disk			;
+	LD		(Pg0CurentDisk),A			; Put into Page 0					;
+	RET																		;
+;------------------------- Set Page 0 Current Disk -------------------------;
+;--------------------------------- Parse Token -----------------------------;
+; Parse command buffer.														;
+; Used to isolate the command												;
+																			;
+ParseToken2:																;
+	LD		HL,Token2					; Point at Token2 start				;
+	JR		ParseToken														;
+ParseToken1:																;
+	LD		HL,Token1					; Point at Token1 start				;
+ParseToken:																	;
+	PUSH	HL							; Start of Token's Pointer			;
+	PUSH	HL							; Start of Token's Pointer			;
+	XOR		A							; Set A to 0						;
+	LD		(selectedDisk),A			; Assume default disk				;
+	LD		HL,(commandBufferPointer)	; Buffer's Pointer					;
+	CALL	NextNonBlankChar			; Get printable character			;
+	LD		(tokenStart),HL				; Save token's address				;
+	EX		DE,HL						; DE -> Buffer						;
+	POP		HL							; DE -> Buffer,						;
+										;  HL -> Start of Token's Pointer   ;
+; Disk ?																	;
+	LD		A,(DE)						; Get 1st character from buffer		;
+	OR		A							; Is it the default Disk ?			;
+	JR		Z,UseCurrentDisk			; Use current disk if empty			;
+	SBC		A,040H						; Convert to number					;
+	LD		B,A							; Hold disk number in B				;
+	INC		DE																;
+	LD		A,(DE)						; Look at next character			;
+	CP		COLON						; Is it a ':' ?						;
+	JR		Z,UseTokensDisk				;  if yes, set disk number			;
+; No Disk																	;
+	DEC		DE							; Back to start of buffer			;
+																			;
+UseCurrentDisk:																;
+	LD		A,(currentDisk)				; Get current Disk					;
+	LD		(HL),A						; Put into the Token				;
+	JP		SetFileName														;
+																			;
+UseTokensDisk:																;
+	LD		A,B							; Get disk from this parse			;
+	LD		(selectedDisk),A			; Mark as disk selected				;
+	LD		(HL),B						; Put it into the token				;
+	INC		DE							; Move past the ':'					;
+																			;
+SetFileName:																;
+	LD		B,FILE_NAME_SIZE			; File name length (max)			;
+	CALL	FormatElement				; Format file name					;
+																			;
+SetType:																	;
+	LD		B,FILE_TYPE_SIZE			; File type length (max)			;
+	CALL	IsItDot						; is it a '.' ?						;
+	CALL	Z,FormatElement				;  Yes,Format it					;
+																			;
+; Zero Rest of token														;
+	LD		B,3																;
+	XOR		A																;
+	CALL	FillWithAcc														;
+	EX		DE,HL															;
+	LD		(commandBufferPointer),HL	; Set new starting point			;
+; Recover the start address of the FCB and count ?'s						;
+	POP		HL							; Restore start of Token			;
+	LD		B,FILE_NAME_SIZE + FILE_TYPE_SIZE ; Loop size					;
+	LD		C,00						; Counter							;
+	LD		A,QMARK						; We want to count '?'s				;
+QuestionMarkCount:															;
+	INC		HL							; Adjust token pointer				;
+	CP		(HL)						; Is it a '?'						;
+	JR		NZ,QuestionMarkCount1		;  no, then skip					;
+	INC		C							;  else increment the count			;
+QuestionMarkCount1:															;
+	DJNZ	QuestionMarkCount			; Manage the Loop					;
+	LD		A,C																;
+	OR		A																;
+	RET																		;
+;-------------------------------- Parse Token ------------------------------;
+;------------------------------- Format Element ----------------------------;
+; Put element in a Left Justified, Space Padded field.						;
+; If it encounters an asterisk, it will pad the rest of the field with '?'s ;
+; Enter With:	B  = Element size											;
+;				DE = Element source											;
+;				HL = Element destination									;
+FormatElement:																;
+	CALL	IsItADelimiter				; Is character a delimiter ?		;
+	JR		Z,PadTheElement				;  yes, pad rest of Element			;
+																			;
+	INC		HL							;  else move the Token's pointer	;
+	CP		ASTERISK					; Is it an '*'						;
+	JR		NZ,FormatElement1				;  no, then just put in Token   ;
+	LD		(HL),QMARK					;  else Put a '?' in token			;
+	JR		FormatElement2				;  for rest of Element				;
+																			;
+FormatElement1:																;
+	LD		(HL),A						; Put character in token			;
+	INC		DE							; Increment the buffer pointer		;
+FormatElement2:																;
+	DJNZ	FormatElement				; Loop if more						;
+																			;
+TruncateElement:															;
+	CALL	IsItADelimiter				; We expect a delimiter				;
+	RET		Z							; If we get one, we are done		;
+	INC		DE							;  skip forward in buffer			;
+	JR		TruncateElement				; Keep looking for delimiter		;
+																			;
+PadTheElement:																;
+	CALL	FillWithSpace				; Pad the rest of Element			;
+	RET																		;
+;------------------------------- Format Element ----------------------------;
+;-------------------------------- Is It a Dot ------------------------------;
+; Check to see if char is buffer is a period. If it is it returns with		;
+; the Z-Flag set., and the DE pointer advanced beyond the '.'.  If it is	;
+; not a period. It will fill the buffer with spaces and return with the		;
+; Z-Flag reset.																;
+;																			;
+; Enter With:	DE = Pointer for buffer										;
+;					B = buffer size											;
+; Return With:	DE = Past the period										;
+;				Z-Flag =  set if Period										;
+; 				Z-Flag = reset if not Period								;
+IsItDot:																	;
+	LD		A,(DE)															;
+	INC		DE							; Assume it is a '.'				;
+	CP		PERIOD						; Is it '.' ?						;
+	RET		Z							;  if yes exit with Z-Flag set		;
+																			;
+	DEC		DE							; Adjust, wrong assumption			;
+	CALL	FillWithSpace				;  else make all spaces				;
+	XOR		A																;
+	INC		A							; Reset the Z-Flag					;
+	RET									; Exit with Z-Flag reset			;
+;-------------------------------- Is It a Dot ------------------------------;
+;-------------------------- Fill With Space/Acc ----------------------------;
+; fills buffer with SPACE or contents of Acc.								;
+; Enters with:	HL = less than start of fill area							;
+;				B  = fill Count												;
+;				A  = fill character (FillWithAcc)							;
+FillWithSpace:																;
+	LD		A,SPACE															;
+FillWithAcc:																;
+	INC		HL																;
+	LD		(HL),A															;
+	DJNZ	FillWithAcc														;
+	RET																		;
+;-------------------------- Fill With Space/Acc ----------------------------;
+;------------------------ Next Non Blank Character -------------------------;
+;find the next non blank character in line pointed to by DE					;
+NextNonBlankChar:															;
+	LD		A,(HL)						; Get the character					;
+	OR		A							; Is it End of buffer ?				;
+	RET		Z							;  if yes, return					;
+	CP		SPACE						; is it a blank ?					;
+	RET		NZ							;  if not, return					;
+	INC		HL							;  else increment pointer			;
+	JR		NextNonBlankChar			; Loop for next character			;
+;------------------------ Next Non Blank Character -------------------------;
+;---------------------------- Is It A Delimiter ----------------------------;
+; Returns with Z-flag set if (DE) pointing at a delimiter					;
+; Does an error exit if not valid ASCII character							;
+IsItADelimiter:																;
+	LD		A,(DE)						; Get the character					;
+	OR		A																;
+	RET		Z							; End of Buffer is a delimiter		;
+	CP		SPACE															;
+	JP		C,CommandError				; Error exit if not ASCII			;
+	RET		Z							; SPACE is a delimiter				;
+	CP		EQUAL_SIGN														;
+	RET		Z							; '=' is a delimiter				;
+	CP		UNDER_SCORE														;
+	RET		Z							; '_' is a delimiter				;
+	CP		PERIOD															;
+	RET		Z							; '.' is a delimiter				;
+	CP		COLON															;
+	RET		Z							; ':' is a delimiter				;
+	CP		SEMICOLON														;
+	RET		Z							; ';' is a delimiter				;
+	CP		LESS_THAN														;
+	RET		Z							; '<' is a delimiter				;
+	CP		GREATER_THAN													;
+	RET		Z							; '>' is a delimiter				;
+	RET									; Not a delimiter					;
+;---------------------------- Is It A Delimiter ----------------------------;
+;---------------------------- Intrinsic Function ---------------------------;
+;look for intrinsic functions (Token1 has been filled)						;
+IntrinsicFunction:															;
+	LD		HL,builtInCMDNames			; Point at List of CMDs				;
+	LD		C,0							; Initialize counter				;
+IntrinsicFunction1:															;
+	LD		A,C							; Get Counter						;
+	CP		builtInCMDCount				; Past number of commands ?			;
+	RET		NC							;  exit if yes						;
+	LD		DE,Token1 + 1			; Beginning of name						;
+	LD		B,builtInCMDNameSize		; Length of match					;
+IntrinsicFunction2:															;
+	LD		A,(DE)															;
+	CP		M							; Is there a match ?				;
+	JR		NZ,IntrinsicFunction3		;  skip if no match					;
+	INC	DE																	;
+	INC		HL							; Point at next characters			;
+	DEC		B							; Decrement the counter				;
+	JR		NZ,IntrinsicFunction2		; Loop while matching				;
+; complete match on name, check for blank in FCB							;
+	LD		A,(DE)															;
+	CP		SPACE						; Blank in CMD ?					;
+	JR		NZ,IntrinsicFunction4		;  No ,then no match				;
+	LD		A,C							;  Else they match,					;
+	RET									; Return with index in A			;
+																			;
+IntrinsicFunction3:															;
+	INC		HL							; Move to next in list				;
+	DEC		B																;
+	JR		NZ,IntrinsicFunction3		; Loop thru this one				;
+																			;
+IntrinsicFunction4:															;
+	INC		C							; Update the index					;
+	JR		IntrinsicFunction1			;  loop for another round			;
+;---------------------------- Intrinsic Function ---------------------------;
+ ; cmd
+;------------------------------ Command Error ------------------------------;
+;error in command string starting at position;'tokenStart' and ending 		;
+; with first delimiter														;
+																			;
+CommandError:																;
+	CALL	PrintCrLf						; Next Line						;
+	LD		HL,(tokenStart)			; Start of error token					;
+CommandErrorLoop:															;
+	LD		A,(HL)						; Get character						;
+	CP		SPACE						; Past offending token ?			;
+	JR		Z,CommandErrorExit			;  done if yes						;
+	OR		A							; At end of command ?				;
+	JR		Z,CommandErrorExit			;  done if yes						;
+	PUSH	HL							; Save pointer						;
+	CALL	PrintCharInA				; Display on console				;
+	POP		HL							; Restore pointer					;
+	INC		HL							; Update it							;
+	JR		CommandErrorLoop			; Keep going						;
+																			;
+CommandErrorExit:															;
+	LD		A,QMARK															;
+	CALL	PrintCharInA				; Send '?' to console				;
+	CALL	PrintCrLf						; Next Line						;
+	CALL	DeleteSubmitFile			; Remove any submit file			;
+	JP		ccpMainEntry				; Go back for another command		;
+;------------------------------ Command Error ------------------------------;
+;------------------------------ Command Buffer -----------------------------;
+maximumBufferSize	EQU	07FH				; Max Length of Buffer			;
+commandMaxLength:	DB	maximumBufferSize									;
+commandLength:		DB	00H					; Actual size of input			;
+commandBuffer:		DS	maximumBufferSize + 1; The Command Buffer			;
+																			;
+commandBufferPointer:	DW	commandBuffer	; Address of next to char		;
+;------------------------------ Command Buffer -----------------------------;
+;------------------------- Submit File Control Block -----------------------;
+;																			;
+submitFlag:			DB		00H			; 00 if no submit file,				;
+										;  0FFH if submitting				;
+submitFCB:			DB		0			; User
+submitName:			DB		'$$$     '	; File name is $$$				;
+submitType:			DB		'SUB'		; Type is 'SUB'						;
+submitEX:			DB		00H			; Extent							;
+submitS1:			DB		00H			; S1								;
+submitFWF:								; Bit7 = FileWriteFlag				;
+submitS2:			DB		00H			; S2 (bit7 = FileWriteFlag)			;
+submitRC:			DB		00H			; RC								;
+submitMap:			DS		010H		; Allocation Map					;
+submitCR:			DB		00H			; Current Record					;
+;------------------------- Submit File Control Block -----------------------;
+;--------------------------- Built In Command Data -------------------------;
+;intrinsic function names four characters each								;
+builtInCMDNameSize	EQU		04			; Size of intrinsic function names  ;
+																			;
+builtInCMDNames:															;
+	DB		'DIR '															;
+	DB		'ERA '															;
+	DB		'TYPE'															;
+	DB		'SAVE'															;
+	DB		'REN '															;
+	DB		'USER'															;
+builtInCMDCount	EQU	(($-builtInCMDNames)/builtInCMDNameSize) + 1			;
+																			;
+builtInCMDVector:															;
+	DW		ccpDirectory				; Directory List					;
+	DW		ccpErase					; File erase						;
+	DW		ccpType						; Type file on Console				;
+	DW		ccpSave						; Save memory image					;
+	DW		ccpRename					; File rename						;
+	DW		ccpUser						; User number						;
+	DW		ccpUserCommand				; User-defined function				;
+																			;
+;--------------------------- Built In Command Data -------------------------;
+;===========================================================================;
+;============================== CCP Commands ===============================;
+;===========================================================================;
+;----------------------------- Directory Listing ---------------------------;
+; SYNTAX: DIR afn															;
+;																			;
+;  The 'DIR' command causes the names of all the files that satisfy the		;
+; ambiguous filename afn to be listed on the console device					;
+;																			;
+ccpDirectory:																;
+	CALL	ParseToken1					; Token1 gets file name				;
+	CALL	SetDiskForCmd				; Change disk if needed				;
+	LD		HL,Token1 + 1				; Point at 1st char of parameter	;
+	LD		A,(HL)						; Get the value						;
+	CP		SPACE						; Is it Blank ?						;
+	JR		NZ,ccpDirQualified			;  skip there is a parameter		;
+																			;
+; set Token1 to all ??? for current disk									;
+	LD		B,FILE_NAME_SIZE + FILE_TYPE_SIZE ; Set Limit					;
+ccpDirAll:																	;
+	LD		(HL),QMARK					; Put '?' in Token					;
+	INC		HL							; Increment pointer					;
+	DJNZ	ccpDirAll					; Loop till done					;
+																			;
+ccpDirQualified:															;
+	XOR		A							; Set Acc to 0						;
+	LD		(dirFileCount),A			; Initialize File Count				;
+;	LD		(dirCharCount),A			; Initialize char count				;
+	CALL	FindFirstToken1File			; Look for directory entry			;
+	CALL	Z,PrintNoFile				;  if not found send message		;
+																			;
+ccpDirLoopTop:																;
+	JR		Z,ccpDirEnd					; Exit if directory exhausted		;
+; found, but may be system file												;
+	LD		A,(directoryEntryNumber)	; Get directory entry number		;
+	RRCA																	;
+	RRCA																	;
+	RRCA								; Multiply by 20H					;
+	LD		C,A																;
+	LD		B,0							; BC has index into Dir Buffer		;
+	LD		IX,DMABuffer													;
+	ADD		IX,BC						; IX Points at the Dir Entry		;
+	BIT		7,(IX + fcbSystemFileIndex)	; Is this a System File				;
+	JR		NZ,ccpDirLoopBottom			;  if yes, Skip to next iteration   ;
+																			;
+	PUSH	IX							; IX Points at the Dir Entry		;
+	XOR		A																;
+	LD		(dirCharCount),A			; Initialize char count				;
+																			;
+	LD		HL,dirFileCount				; Point at dirFileCount				;
+	LD		A,(HL)						; Get the dirFileCount				;
+	INC		(HL)						; Increment dirFileCount			;
+	AND		11B							; Perform Mod(E,4)					;
+	JR		NZ,ccpDirDisplayFile0		; Skip header if not 0				;
+																			;
+; print the header: new Line followed by drive with Colon - A :				;
+	CALL	PrintCrLf						; New Line						;
+	PUSH	BC																;
+	CALL	GetSelectedDrive			; Get Active drive number			;
+	POP		BC																;
+	ADD		A,ASCII_A					; Make it ASCII						;
+	CALL	PrintCharInA					; Send it to the console		;
+	LD		A,COLON															;
+	CALL	PrintCharInA					; Send ':' to the console		;
+	JR		ccpDirDisplayFile			; Skip ':' display					;
+																			;
+ccpDirDisplayFile0:															;
+	CALL	PrintSpace					; Send Space to console				;
+	LD		A,COLON															;
+	CALL	PrintCharInA					; Send ':' to the console		;
+ccpDirDisplayFile:															;
+	CALL	PrintSpace					; Send Space to console				;
+																			;
+ccpDirDisplayFileLoop:														;
+	POP		IX							; Get to Dir Entry Pointer			;
+	LD		A,(IX + 0)					; Put char in ACC					;
+	INC		IX							; Adjust pointer for next iteration ;
+	PUSH	IX							; Save till then					;
+	AND		ASCII_MASK					; Make sure char is ASCII			;
+	CALL	PrintCharInA				; Send it to the console			;
+	LD		HL,dirCharCount				; Where are we in Token ?			;
+	LD		A,(HL)						; Get index							;
+	INC		(HL)						; Update for next time				;
+	LD		B,A							; Save count						;
+	CP		8							; End of Name ?						;
+	CALL	Z,PrintSpace				; Separate Name and Type			;
+	LD		A,B							; Retrieve count					;
+	CP		11							; At the end of this dir entry ?	;
+	JR		NZ,ccpDirDisplayFileLoop	;  if no continue the iteration		;
+																			;
+ccpDirLoopBottom:															;
+	POP		IX							; Balance stack						;
+	CALL	CheckForConsoleChar			; Interrupt at keyboard ?			;
+	JR		NZ,ccpDirEnd				;  yes, abort directory search		;
+	CALL	SearchForNext				; Look for more entries				;
+	JR		ccpDirLoopTop				;  and loop thru					;
+ccpDirEnd:																	;
+	JP		RestoreDiskAtCmdEnd			; Wrap up and start over			;
+																			;
+dirFileCount:																;
+	DB		0																;
+dirCharCount:																;
+	DB		0																;
+;----------------------------- Directory Listing ---------------------------;
+
+;-------------------------------- Erase Files ------------------------------;
+; SYNTAX: ERA afn															;
+;																			;
+;  The 'ERA' command removes files from the currently logged-in disk. The   ;
+; files that are erased are those that satisfy the ambiguous filename		;
+; reference afn.															;
+;																			;
+ccpErase:																	;
+	CALL	ParseToken1					; Parse the command					;
+	CP		FILE_NAME_SIZE + FILE_TYPE_SIZE ; All '?'s ?					;
+	JR		NZ,ccpEraseFile				;  skip if not						;
+; Want to be sure															;
+	LD		BC,msgEraseAll				; Point at the message				;
+	CALL	PrintCrLfStringNull			; Display it on the console			;
+																			;
+	CALL	ReadCommand					; Get the operator's response		;
+	LD		HL,commandLength			; Point at size of response			;
+	DEC		M							; Test the size						;
+	JP		NZ,ccpMainEntry			; Exit, wrong answer					;
+	INC		HL							; point at the 1 char response		;
+	LD		A,(HL)						; Get it into ACC					;
+	CP		ASCII_Y						; Is it 'Y'							;
+	JP		NZ,ccpMainEntry				;  exit if not						;
+																			;
+	INC		HL							; Adjust the pointer				;
+	LD	(commandBufferPointer),HL		; Restore buffer pointer			;
+ccpEraseFile:																;
+	CALL	SetDiskForCmd				; Change disks for this command		;
+	LD		DE,Token1					; Point to target FCB				;
+	CALL	DeleteFile					; Call BDOS to delete				;
+	INC		A							; 255 returned if not found			;
+	CALL	Z,PrintNoFile				; Report if file not found			;
+	JP		RestoreDiskAtCmdEnd			; Wrap up and start over			;
+																			;
+msgEraseAll:																;
+	DB		'ALL (Y/N)?',0													;
+;-------------------------------- Erase Files ------------------------------;
+
+;-------------------------------- Rename Files -----------------------------;
+; SYNTAX: REN ufn1=ufn2														;
+;																			;
+;  The 'REN' command allows you to change the name of files on disk. The	;
+; file satisfying ufn2 is changed to ufn1. The currently logged disk is		;
+; assumed to contain the file to rename (ufn2).								;
+ccpRename:																	;
+	CALL	ParseToken1					; Get ufn1							;
+	JP		NZ,CommandError				; Must be unambiguous. No '?'s		;
+	LD		A,(selectedDisk)			; Get saved disk					;
+	PUSH	AF							; Save for later compare			;
+	CALL	SetDiskForCmd				; Change disks for this command		;
+	CALL	FindFirstToken1File			; Is ufn1 already there?			;
+	JR		NZ,ccpRenameError3			;  if yes, report error				;
+																			;
+ccpRenameFCB1:																;
+; file doesn't exist, move to second half of FCB							;
+	LD		HL,Token1					; Point at FCB for ufn1				;
+	LD		DE,Token2					; Point where to put it				;
+	LD		BC,16						; FCB F1...F8,T1...T3,EXT,S1,S2,RC  ;
+	LDIR	ccpRenameFCB1				; Move the FCB						;
+; check for = or left arrow													;
+	LD		HL,(commandBufferPointer)	; Get pointer						;
+;	EX		DE,HL															;
+	CALL	NextNonBlankChar			; Get a live character				;
+	CP		EQUAL_SIGN					; is it '=' ?						;
+	JR		Z,ccpRenameFCB2				;  do FCB2 if yes					;
+	CP		LEFT_ARROW					; is it '<-' ?						;
+	JR		NZ,ccpRenameError2			;  error if no						;
+																			;
+ccpRenameFCB2:																;
+;	EX		DE,HL															;
+	INC		HL							; Move to start of ufn2				;
+	LD		(commandBufferPointer),HL	; Save for parser					;
+	CALL	ParseToken1					; Get ufn2							;
+	JR		NZ,ccpRenameError2			; Must be unambiguous. No '?'s		;
+																			;
+	POP		AF							; Get saved disk					;
+	LD		B,A							; Save a copy						;
+	LD		HL,selectedDisk				; Point at current selected disk	;
+	LD		A,(HL)						; Get it							;
+	OR		A							; Was it the default disk ?			;
+	JR		Z,ccpRename2				;  skip if yes						;
+; drive name was specified.  same one?										;
+	CP		B							; Are they the same ?				;
+	LD		(HL),B						; Update to new selected disk		;
+	JR		NZ,ccpRenameError2			; Not the same, error exit			;
+ccpRename2:																	;
+	LD		(HL),B						; Update to new selected disk		;
+	XOR		A							; Set ACC = 0						;
+	LD		(Token1),A					; FCB2's disk is default			;
+	CALL	FindFirstToken1File			; Get ufn2'ss directory Entry		;
+	JR		Z,ccpRenameError1			; Error exit if not there			;
+																			;
+	LD		DE,Token1					; Point at both FCBs				;
+	CALL	RenameFile					; Let BDOS do the rename			;
+	JP		RestoreDiskAtCmdEnd			; Exit gracefully					;
+																			;
+ccpRenameError1:															;
+	CALL	PrintNoFile					; Inform operator there is no file	;
+	JP		RestoreDiskAtCmdEnd			; Exit cleanly						;
+																			;
+ccpRenameError2:															;
+	CALL	RestoreDisk					; Restore Disk from before command  ;
+	JP		CommandError				; Error exit						;
+																			;
+ccpRenameError3:															;
+	LD		BC,msgFileExists			; Load message						;
+	CALL	PrintCrLfStringNull			; Display message on console		;
+	JP		RestoreDiskAtCmdEnd			; Exit cleanly						;
+																			;
+msgFileExists:																;
+	DB		'FILE EXISTS',0													;
+;-------------------------------- Rename Files -----------------------------;
+
+;---------------------------------- Save File ------------------------------;
+; SYNTAX: SAVE n ufn														;
+;																			;
+;  The 'SAVE' command places n pages(256-bytes) onto disk from the			;
+; TPA (Location 0100H) and names the file ufn.								;
+																			;
+ccpSave:																	;
+	CALL	GetNumberFromCmdLine		; Value returned in Acc.			;
+	PUSH	AF							; Save value						;
+	CALL	ParseToken1					; Parse to get ufn					;
+	JP		NZ,CommandError				; Must be unambiguous. No '?'s		;
+	CALL	SetDiskForCmd				; Change disks for this command		;
+	LD		DE,Token1					; Get the FCB						;
+	PUSH	DE							; Save FCB							;
+	CALL	DeleteFile					; Deleted file if it exists			;
+	POP		DE							; Restore FCB						;
+	CALL	MakeFile					; Create a new file on disk			;
+	JR		Z,ccpSaveError1				;  exit, no directory space			;
+	XOR		A							; Set Acc = 0						;
+	LD		(currentRecord),A			; Clear next record field			;
+	POP		AF							; # pages to write is in Acc		;
+	LD		L,A							; 	change to # sectors				;
+	LD		H,0							; Sector size is 512				;
+	ADD		HL,HL						; Sector Count						;
+	LD		DE,TPA						; Initialize Memory pointer			;
+																			;
+ccpSaveWrite:																;
+	LD		A,H																;
+	OR		L							; If Sector count = 0				;
+	JR		Z,ccpSaveClose				;  we are finished writing			;
+	DEC		HL							; Decrement Sector count			;
+	PUSH	HL							; Sector count						;
+	LD		HL,cpmRecordSize			; Get bytes to write				;
+	ADD		HL,DE						; Add to memory pointer				;
+	PUSH	HL							; memory pointer					;
+	CALL	SetDMA						; Set DMA							;
+	LD		DE,Token1					; Point at the FCB					;
+	CALL	WriteSeq					; Write a sector from DMA			;
+	POP		DE							; memory pointer					;
+	POP		HL							; Sector count						;
+	JR		NZ,ccpSaveError2			; If disk full, exit				;
+	JR		ccpSaveWrite				; Keep on writing					;
+																			;
+																			;
+ccpSaveClose:																;
+	LD		DE,Token1					; Point at the FCB					;
+	CALL	CloseFile					; Close the File					;
+	INC		A							; Check return code					;
+	JR		NZ,ccpSaveExit				; If OK, clean exit					;
+																			;
+ccpSaveError1:																;
+	LD		BC,msgNoDirSpace			; Load Error Message				;
+	CALL	PrintCrLfStringNull			; Send it to the console			;
+	JR		ccpSaveExit					; Do a clean exit					;
+ccpSaveError2:																;
+	LD		BC,msgNoDiskSpace			; Load Error Message				;
+	CALL	PrintCrLfStringNull			; Send it to the console			;
+																			;
+ccpSaveExit:																;
+	CALL	SetDefaultDMA				; Reset the DMA						;
+	JP		RestoreDiskAtCmdEnd			; Perform a clean exit				;
+																			;
+msgNoDirSpace:																;
+	DB		'NO DIRECTORY SPACE',0											;
+msgNoDiskSpace:																;
+	DB		'NO DISK SPACE',0												;
+;---------------------------------- Save File ------------------------------;
+;---------------------------------- Type File ------------------------------;
+; SYNTAX: TYPE ufn															;
+;																			;
+;  The 'TYPE' command displays the content of the ASCII source file ufn on  ;
+; the currently logged disk at the console device.							;
+																			;
+ccpType:																	;
+	CALL	ParseToken1					; Setup the ufn's FCB				;
+	JP		NZ,CommandError				; Must be unambiguous. No '?'s		;
+	CALL	SetDiskForCmd				; Change disks for this command		;
+	CALL	OpenToken1File				; Open the file at Token1			;
+	JR		Z,ccpTypeError				;  error exit if not successful		;
+																			;
+	CALL	PrintCrLf						; Send new  NewLine to console  ;
+																			;
+ccpTypeRead:																;
+	LD		DE,Token1					; Point at Token1's FCB				;
+	CALL	DiskRead					; Read next Record					;
+	JR		NZ,ccpTypeEOF				; Hard End Of File					;
+																			;
+	LD		B,cpmRecordSize				; Load Character count				;
+	LD		C,fConsoleOut				; Load Function Number				;
+	LD		HL,DMABuffer				; Point at the read buffer			;
+	PUSH	HL							; Buffer Pointer					;
+ccpTypeRecord:																;
+	POP		HL							; Buffer Pointer					;
+	LD		A,(HL)						; Get the Character					;
+	CP		END_OF_FILE					; Are we at EOF ?					;
+	JP		Z,RestoreDiskAtCmdEnd		;  yes, exit						;
+																			;
+	INC		HL							; Increment the Buffer Pointer		;
+	PUSH	HL							; Buffer Pointer					;
+	CALL	PrintCharInA				; Preserve BC						;
+	DJNZ	ccpTypeRecord					; Iterate over the record		;
+	JR		ccpTypeRead					; Iterate over the file				;
+																			;
+ccpTypeEOF:																	;
+	DEC		A							; Error returned ?					;
+	JP		Z,RestoreDiskAtCmdEnd		;  no, Restore Disk and exit		;
+	LD		BC,msgReadErr				; Load Message						;
+	CALL	PrintCrLfStringNull			; Send it to the console			;
+																			;
+ccpTypeError:																;
+	CALL	RestoreDisk					; Restore Disk						;
+	JP		CommandError				; Report error and exit				;
+																			;
+msgReadErr:																	;
+	DB		'READ ERROR',0													;
+																			;
+;---------------------------------- Type File ------------------------------;
+;------------------------------- User Function -----------------------------;
+; SYNTAX: USER n															;
+;																			;
+;  The User command allows maintenance of separate files in the same		;
+; directory. In the syntax line, n is an integer value in the range of 0-15	;
+; On cold start, the operator is automatically logged into user area		;
+; number 0.																	;
+;  The active user number is maintained until changed by a subsequent USER	;
+; command, or until a cold start when user 0 is again assumed				;
+																			;
+ccpUser:																	;
+	CALL	GetNumberFromCmdLine		; Value returned in Acc.			;
+	CP		16							; Greater than 16 ?					;
+	JP		NC,CommandError				;  if yes, Error exit				;
+	LD		E,A							; Prepare for SetUser call			;
+	LD		A,(Token1) + 1				; Look past the number				;
+	CP		SPACE						; Is it a Space ?					;
+	JP		Z,CommandError				;  yes, error exit					;
+	CALL	SetUser						; Call BDOS to set new user			;
+	JP		EndCommand					; Exit cleanly						;
+;------------------------------- User Function -----------------------------;
+;------------------------------- User Command ------------------------------;
+ccpUserCommand:																;
+	LD		A,(Token1) + 1				; Point at start CMD File name		;
+	CP		SPACE						; Is it a Space ?					;
+	JR		NZ,ccpUserCmdFileType		;  skip if not						;
+																			;
+; Disk change A:, B: C: .....												;
+	LD		A,(selectedDisk)			; Get selected disk					;
+	OR		A							; Is it the default disk ?			;
+	JP		Z,EndCommand				; Exit if not						;
+	DEC		A							; Adjust so A=>0, B=>1, C=>2		;
+	LD		(currentDisk),A				; Update current Disk indicator		;
+	CALL	SetPage0CurDisk				; Set user/disk in page 0			;
+	CALL	SelectDisk					;  Go select this disk				;
+	JP		EndCommand					; Exit Cleanly						;
+																			;
+																			;
+ccpUserCmdFileType:															;
+	LD		IX,Token1					; Point at Token1					;
+	LD		A,(IX + 9)					; Get 1st char of CMD file type		;
+	CP		SPACE						; Is it a SPACE ?					;
+	JP		NZ,CommandError				;  Error exit (no type allowed)		;
+	PUSH	IX							; Save Token1 start					;
+	CALL	SetDiskForCmd				; Change disk if needed				;
+	POP		IX							; Restore Token1 start				;
+	LD		(IX + 9 ),ASCII_C												;
+	LD		(IX + 10),ASCII_O												;
+	LD		(IX + 11),ASCII_M			; Set Token1's type to 'COM'		;
+	CALL	OpenToken1File				; Open the CMD File					;
+	JP		Z,ccpUserCmdError			;  if error, then exit				;
+; file opened properly, read it into memory									;
+																			;
+	LD		HL,TPA						; Set Read buffer to TPA start		;
+ccpUserCmdReadFile:															;
+	PUSH	HL							; Save current read buffer pointer  ;
+	EX		DE,HL						; Load buffer pointer for BDOS call ;
+	CALL	SetDMA						; Set the DMA						;
+	LD		DE,Token1					; Point at Token1's FCB				;
+	CALL	DiskRead					; Read int the buffer				;
+	JR		NZ,ccpUserCmdSetFCBs		;  finished ?, skip					;
+																			;
+	POP		HL							; Get prior Pointer					;
+	LD		DE,cpmRecordSize			; Get Record size					;
+	ADD		HL,DE						; Need to make new pointer			;
+	LD		DE,CcpBoundary				;  Are we still in TPA ?			;
+	LD		A,L																;
+	SUB		E																;
+	LD		A,H																;
+	SBC		A,D																;
+	JR		NC,ccpUserCmdErrorBadLoad	;  no, error exit					;
+	JR		ccpUserCmdReadFile			;  else go for another sector		;
+																			;
+ccpUserCmdSetFCBs:															;
+	POP		HL							; Balance the Stack					;
+	DEC		A							; Test DiskRead return value		;
+	JR		NZ,ccpUserCmdErrorBadLoad	;  error exit if problem			;
+	CALL	RestoreDisk					; Restore Disk from before command  ;
+	CALL	ParseToken1					; Parse FCB1 from command line		;
+	LD		HL,selectedDisk				; Point at selected disk			;
+	LD		A,(HL)						; Get selected disk					;
+	LD		(Token1),A					;  and put into FCB1				;
+	CALL	ParseToken2					; Parse FCB2 from command line		;
+	LD		HL,selectedDisk				; Point at selected disk			;
+	LD		A,(HL)						; Get selected disk					;
+	LD		(Token2),A					;  and put into FCB2				;
+	XOR		A							; Set Acc to 0						;
+	LD		(currentRecord),A			; Initialize record number			;
+																			;
+	LD		HL,Token1					; Set Source						;
+	LD		DE,FCB1						; Set destination					;
+	LD		BC,33						; Set Size							;
+	LDIR								; Move FCBs to Page 0				;
+	LD		HL,commandBuffer			; Point at raw command input		;
+ccpUserCmdFindTailStart:													;
+	LD		A,(HL)						; Get byte from raw input			;
+	OR		A							; Are we at end of input ?			;
+	JR		Z,ccpUserCmdTailSetUp		;  yes, get out of loop				;
+	CP		SPACE						; Is it a Space						;
+	JR		Z,ccpUserCmdTailSetUp		;  yes, get out						;
+	INC		HL							; increment the pointer				;
+	JR		ccpUserCmdFindTailStart		; Go back for more					;
+																			;
+ccpUserCmdTailSetUp:														;
+	LD		B,0							; Initialize Tail Count				;
+;	LD		A,0							; Marker for end of buffer			;
+	LD		DE,ComTailChars				; XXXXXXX ComTailChars				;
+; ready for the move														;
+ccpUserCmdTailMove:															;
+;	CP		(HL)						; Are we at end of Buffer ?			;
+;	JR		Z,ccpUserCmdTailCount		;  skip if yes						;
+	LD		A,(HL)															;
+	LD		(DE),A						;  else move the character			;
+	OR		A							; Is it end of command line ?		;
+	JR		Z,ccpUserCmdTailCount		;  skip if yes, we are done			;
+	INC		B							; Adjust the count					;
+	INC		HL							; Increment the target pointer		;
+	INC		DE							; Increment the source pointer		;
+	JR		ccpUserCmdTailMove			; Go back for more					;
+																			;
+ccpUserCmdTailCount:														;
+	LD		A,B							; Get the character count			;
+	LD		(DMABuffer),A				; XXXXXXX ComTailCount				;
+																			;
+	CALL	PrintCrLf						; Send new line to console		;
+; now go to the loaded program												;
+	CALL	SetDefaultDMA				; Reset the DMA						;
+	CALL	SaveUserAndDisk				; User code saved in page 0			;
+; low memory diska contains user code										;
+																			;
+	CALL	TPA							; Go to the loaded program			;
+	LD		SP,Stack					; May come back here, so			;
+	CALL	SetPage0CurDisk				;  we need to clean things			;
+	CALL	SelectDisk					;  up.								;
+	JP		ccpMainEntry				; And go back to CCP				;
+																			;
+ccpUserCmdError:															;
+	CALL	RestoreDisk					; Restore Disk from before command  ;
+	JP		CommandError				; Exit, and report error			;
+																			;
+ccpUserCmdErrorBadLoad:														;
+	LD		BC,msgBadLoad				; Load error message				;
+	CALL	PrintCrLfStringNull			; Send message to console			;
+	JP		RestoreDiskAtCmdEnd			; Fall thru to end of command		;
+																			;
+msgBadLoad:																	;
+	DB		'BAD LOAD',0													;
+																			;
+;------------------------------- User Command ------------------------------;
+;===========================================================================;
+;================================ BDOS API =================================;
+;===========================================================================;
+
+;------------------------------- Initialize --------------------------------;
+Initialize:																	;
+	LD		C,fResetSystem				; Load Function Number  - 0D		;
+	JP		BDOS						;  and let BDOS do its work			;
+;------------------------------- Initialize --------------------------------;
+;------------------------------- Select Disk -------------------------------;
+SelectDisk:																	;
+	LD		E,A							; Load Target disk					;
+	LD		C,fSelectDisk				; Load Function Number - 0EH		;
+	JP		BDOS						;  and let BDOS do its work			;
+;------------------------------- Select Disk -------------------------------;
+;-------------------------------- Open File --------------------------------;
+;Open the file																;
+; On Entry DE = FCB to read													;
+; Exits with Z-Flag Set if file not found									;
+;					Reset if file found										;
+OpenFile:																	;
+	LD		C,fOpenFile					; Load Function Number - 0FH		;
+	JP		BDOSandIncA					; make BDOS call & set dir index	;
+;-------------------------------- Open File --------------------------------;
+;------------------------------- Close File --------------------------------;
+;Close the file																;
+; On Entry DE = FCB to Close												;
+; Exits with Z-Flag Set if file not found									;
+;					Reset if file found										;
+CloseFile:																	;
+	LD		C,fCloseFile				; Load Function Number - 10H		;
+	JP		BDOSandIncA					; make BDOS call & set dir index	;
+;------------------------------- Close File --------------------------------;
+;-------------------------------- Read File --------------------------------;
+;Read the next record from the file.										;
+; On Entry DE = FCB to read													;
+DiskRead:																	;
+	LD		C,fReadSeq					; Load Function Number - 14H		;
+	CALL	BDOS						;  and let BDOS do its work			;
+	OR		A							; set return code flags				;
+	RET																		;
+;-------------------------------- Read File --------------------------------;
+;----------------------------- Delete The File -----------------------------;
+;Delete the file given by DE												;
+ DeleteFile:																;
+	LD		C,fDeleteFile			; Load Function Number - 13H			;
+	JP		BDOS						;  and let BDOS do its work			;
+;----------------------------- Delete The File -----------------------------;
+;------------------------------- Disk Write --------------------------------;
+;Write the next record to the file given by DE								;
+WriteSeq:																	;
+	LD		C,fWriteSeq					; Load Function Number - 15H		;
+	CALL	BDOS						;  and let BDOS do its work			;
+	OR		A							; set return code flags				;
+	RET																		;
+;------------------------------- Disk Write --------------------------------;
+;-------------------------------- Make File --------------------------------;
+;Make the file given by DE													;
+MakeFile:																	;
+	LD		C,fMakeFile					; Load Function Number - 16H		;
+	JP		BDOSandIncA					; make BDOS call & set dir index	;
+;-------------------------------- Make File --------------------------------;
+;------------------------------- Rename File -------------------------------;
+; Rename a file give by DE													;
+ RenameFile:																;
+	LD		C,fRenameFile				; Load Function Number - 17H		;
+	JP		BDOS						;  and let BDOS do its work			;
+;------------------------------- Rename File -------------------------------;
+;---------------------------- Set (Default) DMA ----------------------------;
+;Set default buffer DMA address (0080H)										;
+SetDefaultDMA:																;
+	LD		DE,DMABuffer													;
+;---------																	;
+;Set DMA address to DE														;
+SetDMA:																		;
+	LD		C,fSetDMA					; Load Function Number - 1AH		;
+	JP		BDOS						;  and let BDOS do its work			;
+;---------------------------- Set (Default) DMA ----------------------------;
+;----------------------------- Get Current Disk ----------------------------;
+;Exits with current drive number to A (0=A,1=B....F=P)						;
+GetSelectedDrive:															;
+	LD		C,fGetCurrentDisk				; Load Function Number - 19H	;
+	JP		BDOS						;  and let BDOS do its work			;
+;----------------------------- Get Current Disk ----------------------------;
+;------------------------------ Get/Set User -------------------------------;
+;return current user code in A												;
+GetUser:																	;
+	LD		E,0FFH						; Set Entry Parameter for Get		;
+; If E <> -1 then Set user number found in E								;
+SetUser:																	;
+	LD		C,fGetSetUserNumber			; Load Function Number - 20H		;
+	JP		BDOS						;  and let BDOS do its work			;
+;------------------------------ Get/Set User -------------------------------;
+;------------------------------ BDOS and Inc A -----------------------------;
+; Call B DOS																;
+;  Store returned directory index											;
+;  Increment result.														;
+; Exits with	A =  0 if File Not Found									;
+;					<> 0 if file found										;
+BDOSandIncA:																;
+	CALL	BDOS						; Make call to BDOS					;
+	LD		(directoryEntryNumber),A	; Save return value					;
+	INC		A							; Increment & (Re)Set Z-Flag		;
+	RET																		;
+;------------------------------ BDOS and Inc A -----------------------------;
+;===========================================================================;
+;=============================== Utilities =================================;
+;===========================================================================;
+;------------------------------- Print Space -------------------------------;
+PrintSpace:																	;
+	LD		E,SPACE						; Load Space						;
+	JR		PrintCharInE				; Go Print it  * Save BC			;
+;------------------------------- Print Space -------------------------------;
+;------------------------------- PrintCharInA ------------------------------;
+; Print character															;
+; On Entry A = Character to Send to Console									;
+PrintCharInA:																;
+	LD		E,A							; move char to E					;
+	JR		PrintCharInE													;
+;------------------------------- PrintCharInA ------------------------------;
+;------------------------------- PrintCharInE ------------------------------;
+; Print character															;
+; On Entry E = Character to Send to Console									;
+; Preserves BC								;								;
+PrintCharInE:																;
+	PUSH	BC							; Preserve BC						;
+	LD		C,fConsoleOut				; Load Function Number				;
+	CALL	BDOS						;  and let BDOS do its work			;
+	POP		BC							; Restore BC						;
+	RET																		;
+;------------------------------- PrintCharInE ------------------------------;
+;-------------------------------- CR / LF ----------------------------------;
+;Sent Carriage Return Line Feed to Console									;
+PrintCrLf:																	;
+	PUSH	BC							; Preserve BC						;
+	LD		E,CR						; Load Carriage Ceturn				;
+	LD		C,fConsoleOut				; Load Function Number				;
+	CALL	BDOS						;  and let BDOS do its work			;
+	LD		E,LF						; Load Line Feed					;
+	LD		C,fConsoleOut				; Load Function Number				;
+	CALL	BDOS						;  and let BDOS do its work			;
+	POP		BC							; Restore BC						;
+	RET																		;
+;-------------------------------- CR / LF ----------------------------------;
+;----------------- Print (CRLF then ) Null Terminated String ---------------;
+;print CRLF then null terminated string at (BC)								;
+PrintCrLfStringNull:														;
+	PUSH	BC							; Save string pointer				;
+	CALL	PrintCrLf						; Send CR/LF					;
+	POP		HL							; Restore pointer & fall thru		;
+;print null terminated string from (HL)										;
+PrintStringNull:															;
+	LD		A,(HL)						; Get the next character			;
+	OR		A							; Is it the Null terminator ?		;
+	RET		Z							;  exit if yes						;
+	INC		HL							; Move string pointer				;
+	PUSH	HL							; Save for next iteration			;
+	CALL	PrintCharInA				; Send the character to the console ;
+	POP		HL							; string pointer					;
+	JR		PrintStringNull				; Loop for more						;
+;----------------- Print (CRLF then ) Null Terminated String ---------------;
+;-------------------------- Print 'No File' Message ------------------------;
+ ;print 'no file' message on console										;
+PrintNoFile:																;
+	LD		BC,msgNoFile				; Point to the message				;
+	JR		PrintCrLfStringNull			; Go print it & return to caller	;
+																			;
+msgNoFile: DB 'NO FILE',0													;
+;-------------------------- Print 'No File' Message ------------------------;
+;------------------------- Check For Console Input -------------------------;
+;check for a character ready at the console									;
+;Exits with	Z-Flag  set if there has been no character input				;
+;					reset if there is a character waiting					;
+;			A = character input, if Z-Flag reset							;
+ CheckForConsoleChar:														;
+	LD		C,fGetConsoleStatus			; Load Function Number - 0BH		;
+	CALL	BDOS						;  and let BDOS do its work			;
+	OR		A							; Check return value				;
+	RET		Z							; Return if no char waiting			;
+																			;
+	LD		C,fConsoleIn				; Load Function Number - 01H		;
+	CALL	BDOS							; character cleared				;
+	OR		A							; Resets the Z-Flag					;
+	RET																		;
+;------------------------- Check For Console Input -------------------------;
+;--------------------------- Set Disk For Command --------------------------;
+;change disks for this command, if requested								;
+ SetDiskForCmd:																;
+	XOR		A							; Set to 0							;
+	LD		(Token1),A					; Set Token's disk to default		;
+	LD		A,(selectedDisk)			; Get the selected disk				;
+	OR		A							; Is it also set for default ?		;
+	RET		Z							;  exit if yes						;
+	DEC		A							; Adjust so A=0,B=2....				;
+	LD		HL,currentDisk				; Point at the current disk			;
+	CP		M							; Are they the same ?				;
+	RET		Z							;  exit if yes						;
+	JP		SelectDisk					;  else go select the disk			;
+																			;
+;--------------------------- Set Disk For Command --------------------------;
+;------------------------ Restore Disk at Command End ----------------------;
+;Restore disk from before command, fall thru to end of command				;
+RestoreDiskAtCmdEnd:														;
+	CALL	RestoreDisk					; Restore Disk from before command  ;
+																			;
+;End of intrinsic command													;
+EndCommand:																	;
+	CALL	ParseToken1					; Check for garbage at end of line  ;
+	LD		A,(Token1) + 1				; Point at 1st character			;
+	SUB		SPACE						; Get ??							;
+	LD		HL,selectedDisk													;
+	OR		M							; Are they equal ?					;
+; 0 in accumulator if no disk selected, and blank FCB						;
+	JP		NZ,CommandError				;  no, report error					;
+	JP		ccpMainEntry				;  else go back to the Start		;
+;------------------------ Restore Disk at Command End ----------------------;
+;------------------------ Get Number From Command Line ---------------------;
+; Get number from the command line											;
+; Exits with A = Value														;
+GetNumberFromCmdLine:														;
+	CALL	ParseToken1					; Get token							;
+	LD		A,(selectedDisk)			; Get currently selected disk		;
+	OR		A							; Is it current default disk ?		;
+	JP		NZ,CommandError				;  no, then error exit				;
+; convert the byte value in Token1 to binary								;
+																			;
+	LD		HL,0000															;
+	LD		BC,0000						; Clear the registers				;
+																			;
+	LD		IX,Token1 + 1													;
+CalculateNumber:															;
+	LD		A,(IX + 0)					; Get Character						;
+	INC		IX							; Adjust for next time around		;
+	CP		SPACE						; Terminating character ?			;
+	JR		Z,ReturnNumericValue		;  get out if yes					;
+	SUB		ASCII_ZERO					; Make binary						;
+	CP		0AH							; Is it a digit ?					;
+	JR		NC,ReturnNumericValue		;  get out if no					;
+	ADD		HL,HL						; Prior value * 2					;
+	PUSH	HL							; Move *2							;
+	POP		DE							;  to DE							;
+	ADD		HL,HL						; Prior value * 4					;
+	ADD		HL,HL						; Prior value * 8					;
+	ADD		HL,DE						; Add * 2 gives Prior value * 10	;
+	LD		C,A							; Get this digit					;
+	ADD		HL,BC						; and add it						;
+	JR		CalculateNumber													;
+																			;
+ReturnNumericValue:															;
+	LD		A,L							; Put result in Acc					;
+	RET																		;
+																			;
+;------------------------ Get Number From Command Line ---------------------;
+;-------------------------------- Restore Disk -----------------------------;
+; Restore Disk from before command											;
+RestoreDisk:																;
+	LD		A,(selectedDisk)			; Get disk selected by command		;
+	OR		A							; Is it the Default ?				;
+	RET		Z							;  yes, the nothing to do			;
+	DEC		A							; Change to 0=A, 1=B....			;
+	LD		HL,currentDisk													;
+	CP		M							; Is it the current disk ?			;
+	RET		Z							;  yes, the nothing to do			;
+	LD		A,(currentDisk)				;  else get current disk			;
+	JP		SelectDisk					; Select it							;
+;-------------------------------- Restore Disk -----------------------------;
+;-------------------------- Find First Token1 Entry ------------------------;
+;Search for Token1 file														;
+FindFirstToken1File:														;
+	LD		DE,Token1					; Point at Token1					;
+	JP		SearchForFirst				; Go look for it					;
+;-------------------------- Find First Token1 Entry ------------------------;
+;----------------------------- Find First Entry ----------------------------;
+;Search for the first directory entry given by DE							;
+;Upon entry  DE = FCB														;
+SearchForFirst:																;
+	LD		C,fSearchFirst				; Load Function Number - 11H		;
+	JP		BDOSandIncA					; make BDOS call & set dir index	;
+;----------------------------- Find First Entry ----------------------------;
+;----------------------------- Find  Next Entry ----------------------------;
+;Search for the next occurrence of the file given DE						;
+;Upon entry  DE = FCB														;
+SearchForNext:																;
+	LD		C,fSearchNext				; Load Function Number - 12H		;
+	JP		BDOSandIncA					; make BDOS call & set dir index	;
+;----------------------------- Find  Next Entry ----------------------------;
+;----------------------------- Open Token1 File ----------------------------;
+OpenToken1File:																;
+	XOR		A							; Clear Acc							;
+	LD		(currentRecord),A			; Initialize  next record for I/O   ;
+	LD		DE,Token1					; Point at the FCB					;
+	JP		OpenFile					; Let BDOS open the file			;
+;----------------------------- Open Token1 File ----------------------------;
+	;*****************************************************************
+	;************************ Data Area ******************************
+	;*****************************************************************
+Token1:			DS		16				; Command Token
+Token2:			DS		16				; Command Token
+currentRecord:	DB		00H				; Current record for I/O
+selectedDisk:	DB		00H				; Selected disk for current
+
+tokenStart:		DW		0000H			; Token's pointer
+currentDisk:	DB		00H				; Current disk
+directoryEntryNumber:	DB	00H		; Index into Directory Buffer
+
+endOfCode:
+				ORG		BDOSBase-10H
+Stack:											; Top Of Stack
+;Z_HighestLocation:
+ZZ_MemoryLeft EQU	(BDOSBase-1) - endOfCode

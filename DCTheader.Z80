@@ -1,0 +1,11 @@
+; DCTheader.Z80
+;
+; Disk Control Block Header for CP/M
+
+
+DiskReadCode		EQU		01H			; Code for Read
+diskSectorSize		EQU		200H		; (512) size of physical disk I/O
+DiskControlTable	EQU		0040H		; Disk Control Table in Page 0
+DiskStatusLocation	EQU		043H		; Status after disk I/O placed here
+DiskControlByte		EQU		045H		; Control byte for disk I/O 
+DiskCommandBlock	EQU		046H		; Control Table Pointer 

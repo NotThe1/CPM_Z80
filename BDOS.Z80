@@ -1,0 +1,3554 @@
+;		File created by MakeZ80Source on Tue Sep 18 12:41:03 EDT 2018 from:
+;		C:\Users\admin\Dropbox\Resources\CPM\CurrentOS\8080\BDOSX.asm
+; BDOS.Z80
+
+; 2019-03-04 vConsoleIn Not passing back non-printable characters
+; 2019-03-03 Preserved the IX and IY registers for the Caller
+; 2019-03-02 Refactored constants and removed header files
+; 2019-02-29 Version 1.0
+; 2019-02-04 Fixed bdosStack problem
+; 2019-01-10	Last rev before remaking Find nearest Block
+; 2019-01-11 - BDOS 0.B	- Function 0-A Refactored to Z80 idiom
+; 2018-12-28 Started to refactor to Z80 idiom
+; 2018-03-31 added vector for BDOS Call 5 -ListOut
+; 2018-03-02 Refactored the CP/M Suite
+; 2018-02-12 fixed allocate 16 bit problem
+; 2014-01-16 extended from part of newOS (newBDOS)
+; 2014-03-14	:	Frank Martyn
+	$Include ./stdHeader.Z80
+	$Include ./osHeader.Z80
+	$Include ./diskHeader.Z80
+VERSION			EQU		20H				; Version 2.0
+STACK_SIZE		EQU		20H				; Make stack big enough
+EOD				EQU		-1				; End of Directory
+;*******************************************************************************
+; These are the values handed over by the BDOS when it calls the Writer operation
+; The allocated.unallocated indicates whether the BDOS is set to write to an
+; unallocated allocation block (it only indicates this for the first 128 byte
+; sector write) or to an allocation block that has already been allocated to a
+; file. The BDOS also indicates if it is set to write to the file directory
+;*******************************************************************************
+WriteAllocated		EQU		00H
+WriteDirectory		EQU		01H
+WriteCleanBuffer	EQU		02H
+;************************ BIOS Function Constants **************************;
+bcBoot		EQU		BIOSStart+3*0		; Cold Boot function				;
+bcWboot		EQU		BIOSStart+3*1		; Warm Boot function				;
+bcConst		EQU		BIOSStart+3*2		; Console Status function			;
+bcConin		EQU		BIOSStart+3*3		; Console Input function			;
+bcConout	EQU		BIOSStart+3*4		; Console Output function			;
+bcList		EQU		BIOSStart+3*5		; List Output function				;
+bcPunch		EQU		BIOSStart+3*6		; Punch Output function				;
+bcReader	EQU		BIOSStart+3*7		; Reader Input function				;
+bcHome		EQU		BIOSStart+3*8		; Disk Home function				;
+bcSeldsk	EQU		BIOSStart+3*9		; Select Disk function				;
+bcSettrk	EQU		BIOSStart+3*10		; Set Track function				;
+bcSetsec	EQU		BIOSStart+3*11		; Set Sector function				;
+bcSetdma	EQU		BIOSStart+3*12		; Set DMA function					;
+bcRead		EQU		BIOSStart+3*13		; Read Disk function				;
+bcWrite		EQU		BIOSStart+3*14		; Write Disk function				;
+bcListst	EQU		BIOSStart+3*15		; List Status function				;
+bcSectran	EQU		BIOSStart+3*16		; Sector Translate					;
+;************************ BIOS Function Constants **************************;
+;===========================================================================;
+;	BDOS																	;
+; Calling into	:															;
+;					Register	C - Contains BDOS Function Code				;
+;					Register	A - Holds the Byte argument if any			;
+;					Register DE - Holds the Word argument if any			;
+; Returning from :															;
+;					Register	A - The Byte return value if any			;
+;					Register HL - The Word return value if any				;
+;					( Register A=L and B=H)									;
+;===========================================================================;
+	ORG	BDOSBase
+;===========================BDOS Entry======================================;
+;BDOSEntry:																	;
+																			;
+																			;
+ BdosStart:																	;
+;	LD		A,C																;
+; 	LD		(FunctionValue),A			; Save the function number			;
+																			;
+; Save Calling Arguments													;
+	LD		(paramDE),DE				; Save the Word Argument			;
+	LD		A,E																;
+	LD		(paramE),A					; Save the Byte argument			;
+; Save users Stack pointer													;
+	LD		(usersStack),SP			; Save the User's stack					;
+	LD		SP,bdosStack				; We will use our own stack			;
+	PUSH	IX							; Save users IX register			;
+	PUSH	IY							; Save users IY register			;
+																			;
+; initialize variables														;
+	LD		HL,0000H														;
+	LD		(exitParameterWord),HL		; Assume all is well for return		;
+	XOR		A																;
+	LD		(fcbDisk),A					; Initialize to 00					;
+	LD		(fResel),A					; Clear re selection flag			;
+																			;
+; Set up for return to caller when Function Completes						;
+	LD		HL,ReturnToCaller												;
+	PUSH	HL							;Set up to ReturnToCaller			;
+																			;
+; is it a valid function number ?											;
+;	LD		A,(FunctionValue)			; Get the Function Number			;
+	LD		A,C																;
+	CP		functionCount				; make sure its a good number		;
+	RET		NC							; exit if not a valid function		;
+																			;
+; Calculate the index and get vector to go to								;
+	LD		C,E							; Assume byte argument				;
+	LD		HL,functionTable			; Get table base					;
+	LD		E,A							; Function number in E				;
+	LD		D,0																;
+	ADD		HL,DE						; Have byte location				;
+	ADD		HL,DE						;	but we want a Word offset		;
+	LD		E,(HL)						; Get LSB of vector					;
+	INC		HL																;
+	LD		D,(HL)						; Get MSB of vector					;
+	EX		DE,HL						; Vector now in HL					;
+																			;
+; Vector to Function is in HL												;
+	JP		(HL) 						; Put it into the Program Counter	;
+;===========================BDOS Entry======================================;
+;===========================BDOS Exit ======================================;
+;arrive here at end of processing to return to user							;
+ReturnToCaller:																;
+	LD		A,(fResel)					; get re-selection flag				;
+	OR		A							; is it set?						;
+	JR		Z,ReturnToCaller1												;
+ ;re-selection	may have taken place										;
+	LD		HL,(paramDE)													;
+	LD		(HL),0															;
+	LD		A,(fcbDisk)														;
+	OR		A							; Disk = 0?							;
+	JR		Z,ReturnToCaller1			; exit if yes						;
+																			;
+	LD		(HL),A															;
+	LD		A,(entryDisk)				; get back original Disk			;
+	LD		(paramE),A					; and select it						;
+	CALL	SelectCurrent													;
+																			;
+ReturnToCaller1:
+	POP		IY							; Restore IY
+	POP		IX							; Restore IX
+	LD		HL,(usersStack)													;
+	LD		SP,HL						; restore callers stack				;
+	LD		HL,(exitParameterWord)											;
+	LD		A,L																;
+	LD		B,H							; BA = exitParameterWord			;
+	RET																		;
+;===========================BDOS Exit ======================================;
+;++++++++++++++++++++++++++++ Function Vector Table ++++++++++++++++++++++++;
+functionTable:																;
+	DW		vSystemReset				;	0 - System Reset				;
+	DW		vConsoleIn					;	1 - Console Input				;
+	DW		vConsoleOut					;	2 - Console Output				;
+	DW		vReaderIn					;	3 - Reader Input				;
+	DW		vPunchOut					;	4 - Punch Output				;
+	DW		vListOut					;	5 - List Output					;
+	DW		vDirectConIO				;	6 - Direct Console I/O			;
+	DW		vGetIOBYTE					;	7 - Get I/O Byte				;
+	DW		vSetIOBYTE					;	8 - Set I/O Byte				;
+	DW		vPrintString				;	9 - Print String				;
+	DW		vReadString					;	A - Read Console String			;
+	DW		vGetConsoleStatus			;	B - Get Console Status			;
+diskf	EQU	($-functionTable)/2			; disk functions					;
+	DW		vGetVersion					;	C - Return Version Number		;
+	DW		vResetSystem				;	D - Reset Disk System			;
+	DW		vSelectDisk					;	E - Select Disk					;
+	DW		vOpenFile					;	F - Open File					;
+	DW		vCloseFile					;	10 - Close File					;
+	DW		vFindFirst					;	11 - Search For First			;
+	DW		vFindNext					;	12 - Search for Next			;
+	DW		vDeleteFile					;	13 - Delete File				;
+	DW		vReadSeq					;	14 - Read Sequential			;
+	DW		vWriteSeq					;	15 - Write Sequential			;
+	DW		vMakeFile					;	16 - Make File					;
+	DW		vRenameFile					;	17 - Rename File				;
+	DW		vGetLoginVector				;	18 - Return Login Vector		;
+	DW		vGetCurrentDisk				;	19 - Return Current Disk		;
+	DW		vSetDMA						;	1A - Set DMA address			;
+	DW		vGetAllocAddr				;	1B - Get ADDR (ALLOC)			;
+	DW		vWriteProtectDisk			;	1C - Write Protect Disk			;
+	DW		vGetReadOnlyMap				;	1D - Get Read/Only MAP			;
+	DW		vSetFileAttributes			;	1E - Set File Attributes ??		;
+	DW		vGetDiskParamBlock			;	1F - Get ADDR (Disk Parameters)	;
+	DW		vGetSetUserNumber			;	20 - Set/Get User Code			;
+	DW		vReadRandom					;	21 - Read Random				;
+	DW		vWriteRandom				;	22 - Write Random				;
+	DW		vComputeFileSize			;	23 - Compute File Size			;
+	DW		vSetRandomRecord			;	24 - Set Random Record			;
+	DW		vResetDrive					;	25 - Reset Drive				;
+	DW		DUMMY						;	26 - Access Drive (not supported);
+	DW		DUMMY						;	27 - Free Drive (not supported)	;
+	DW		vWriteRandom0Fill			;	28 - Write random w/Fill		;
+functionCount	EQU	($-functionTable)/2 ; Number of	functions				;
+																			;
+DUMMY:																		;
+	HALT																	;
+;++++++++++++++++++++++++++++ Function Vector Table ++++++++++++++++++++++++;
+;-------------------------- System Reset - 0 (0) ---------------------------;
+;	The system reset function makes CP/M do a complete reset, exactly the	;
+; same as the warm boot function invoked when you transfer control to the	;
+; WARMBOOT point. In addition to resetting the BDOS, this function reloads	;
+; the CCP, rebuilds the allocation vectors for the currently logged disks,	;
+; sets the DMA address (used byCP/M to address the disk read/write buffer)	;
+; to 80H, marks all disks as being Read/Write status, and transfers control	;
+; to the	CCP. The CCP then outputs its prompt to the console.			;
+;																			;
+;			Function Code	:	C = 00H										;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	Does Not Return								;
+;																			;
+;-------------------------- System Reset - 0 (0) ---------------------------;
+vSystemReset:
+	JP		bcWboot						; do a Warm Boot
+;***************************************************************************;
+;								IOByte device I/O							;
+;***************************************************************************;
+;-------------------------- Read Console Byte - 1 (1) ----------------------;
+;	This function reads the next byte of data from the console keyboard and	;
+; puts it into register A. If the character input is a graphic character, it;
+; will be echoed back to the console. The only control characters that are	;
+; echoed are	CARRIAGE RETURN, LINE FEED, BACKSPACE, and TAB. In the case	;
+; of a TAB character, the BDOS outputs as many spaces as are required to	;
+; move the cursor to the next multiple of eight columns. All of the other	;
+; control characters, including CONTROL-C, are input but are not echoed.	;
+;	This function also checks for CONTROL-S (XOFF) to see if console output	;
+; should be suspended, and for CONTROL-P (printer echo toggle) to see if	;
+; console output should also be sent to the list device. If CONTROL-S is	;
+; found, further output will be suspended until you type another character. ;
+; CONTROL-P will enable the echoing of console output the first time it is	;
+; pressed and disable it the second time. If there is no incoming data		;
+; character, this function will wait until there is one.					;
+;																			;
+; This is a blocking function												;
+;																			;
+;																			;
+;			Function Code	:	C = 01H										;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	A = Data byte from console					;
+;																			;
+;-------------------------- Read Console Byte - 1 (1) ----------------------;
+vConsoleIn:
+	CALL	ConIn						; Don't come back without input
+	CALL	IsPrintableASCII			; CR,LF,TAB,BACK_SPACE or GE SPACE
+	LD		(exitParameterByte),A
+	RET		C							; return nothing to echo
+	PUSH	AF							; Save printable character
+	LD		C,A
+	CALL	TabOut						; Send to console. if TAB expand
+	POP		AF							; retrieve exit value
+	LD		(exitParameterByte),A
+	RET
+;------------------------- Write Console Byte - 2 (2) ----------------------;
+;	This function outputs the data byte in register E to the console. As	;
+; with function 1, if the data byte is a TAB character, it will be expanded	;
+; by the BDOS to the next column that is a multiple of eight. The BDOS also	;
+; checks to see if there is an incoming character, and if there is,			;
+; checks to see if it is a CONTROL-S ,in which case console output is		;
+; suspended or CONTROL-P, in which case echoing of console output to the	;
+; printer is	toggled on or off											;
+;																			;
+;			Function Code	:	C = 02H										;
+;			Entry Parameters:	E = Data byte to be output					;
+;			Exit Parameters :	None										;
+;																			;
+;------------------------- Write Console Byte - 2 (2) ----------------------;
+;BDOS put parameter in C before entering this routine
+vConsoleOut:
+	CALL	TabOut
+	RET
+;--------------------------- Read Reader Byte - 3 (3) ----------------------;
+;	function reads the next character from the logical "reader" device into ;
+; register A. In practice, the physical device that is accessed depends		;
+; entirely on how your BIOS is configured. In some systems, there is no		;
+; reader at all; this function will return some arbitrary value such as lAH ;
+; (the ASCII CONTROL-Z character, used by CP/M to denote "End of File').	;
+; Control is not returned to the calling program until a character has been ;
+; read.																		;
+;																			;
+; This is a blocking function												;
+;																			;
+;			Function Code	:	C = 03H										;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	A = Character Input							;
+;																			;
+;--------------------------- Read Reader Byte - 3 (3) ----------------------;
+vReaderIn:
+	CALL	bcReader
+	LD		(exitParameterWord),A
+	RET
+;--------------------------- Write Punch Byte - 4 (4) ----------------------;
+;	This function is a counterpart to the Read "Reader" Byte It outputs the	;
+; specified character from register E to the logical punch device. Again,	;
+; the actual physical device used, if any, is determined by the BIOS.		;
+; There is no set standard for this device; in some systems the punch		;
+; device is a "bit bucket," so called because it absorbs all data that you	;
+; output to it.																;
+;																			;
+;			Function Code	:	C = 04H										;
+;			Entry Parameters:	E = Data byte to be output					;
+;			Exit Parameters :	None										;
+;																			;
+;--------------------------- Write Punch Byte - 4 (4) ----------------------;
+;BDOS put parameter in C before entering this routine
+ vPunchOut:
+	CALL	bcPunch
+	RET
+;---------------------------- Write List Byte - 5 (5) ----------------------;
+;	This function outputs the specified byte in register E to the logical	;
+; list device. As with the reader and the punch, the physical device used	;
+; depends entirely on the BIOS.												;
+;																			;
+;			Function Code	:	C = 05H										;
+;			Entry Parameters:	E = Data byte to be output					;
+;			Exit Parameters :	None										;
+;																			;
+;---------------------------- Write List Byte - 5 (5) ----------------------;
+;BDOS put parameter in C before entering this routine
+ vListOut:								; func5 (05 - 05) List Output
+	CALL	bcList						; direct call to BIOS
+	RET
+;--------------------------- Direct Console I/O - 6 (6) --------------------;
+;	This function serves double duty: it both inputs and outputs characters	;
+; from the console. However, it bypasses the normal control characters and	;
+; line editing features (such as CONTROL-P and CONTROL-S) normally			;
+; associated with console I( O. Hence the name "direct" (or "unadorned" as	;
+; Digital Research describes it). If the value in register E is not OFFH,	;
+; then E contains a valid ASCII character that is output to the console.	;
+;	This function works well provided you never have to send a value ofOFFH	;
+; or expect to receive a value ofOOH. If you do need to send or receive		;
+;	pure binary data, you cannot use this function, since these values are	;
+;	likely to be part of the data stream.									;
+;																			;
+;			Function Code	:	C = 06H										;
+;			Entry Parameters:	E = 0FFH for Input							;
+;								E = Other than 0FFH for Output				;
+;			Exit Parameters :	A = Input byte or status					;
+;																			;
+;--------------------------- Direct Console I/O - 6 (6) --------------------;
+;BDOS put parameter in C before entering this routine
+ vDirectConIO:
+	LD		A,C
+	INC		A
+	JR		Z,vDirectConIO1				; 0ffh => 00h, means input mode
+; send byte to console
+	CALL	bcConout					; Send the byte to the console
+	RET
+;read byte/status from console
+vDirectConIO1:
+	CALL	bcConst						; Check Status
+	OR		A							; 00 means not data ready
+	JP		Z,ReturnToCaller1			; If no data return	00 to caller
+	CALL	bcConin						; Data is available, get it to A
+	LD		(exitParameterByte),A		; Save it
+	RET
+;--------------------------- Get IOBYTE Setting - 7 (7) --------------------;
+; This function places the current value of the IOBYTE in register A.		;
+;																			;
+; The IOBYTE structure:														;
+;								+-------+-------+-------+-------+			;
+;						Bit No. | 7 : 6 | 5 : 4 | 3 : 2 | 1 : 0 |			;
+;								+-------+-------+-------+-------+			;
+;				Logical Device	List | Punch | Reader|Console				;
+;																			;
+;																			;
+;			Function Code	:	C = 07H										;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	A = Current IOBYTE value					;
+;																			;
+;--------------------------- Get IOBYTE Setting - 7 (7) --------------------;
+ vGetIOBYTE:
+	LD		A,(IOBYTE)					; Get the IOBYTE
+	LD		(exitParameterWord),A		; Return it to caller
+	RET
+;--------------------------- Set IOBYTE Setting - 8 (8) --------------------;
+; This function sets the IOBYTE												;
+;																			;
+; The IOBYTE structure:														;
+;								+-------+-------+-------+-------+			;
+;						Bit No. | 7 : 6 | 5 : 4 | 3 : 2 | 1 : 0 |			;
+;								+-------+-------+-------+-------+			;
+;				Logical Device	List | Punch | Reader|Console				;
+;																			;
+;																			;
+;			Function Code	:	C = 08H										;
+;			Entry Parameters:	E = New IOBYTE value						;
+;			Exit Parameters :	None										;
+;																			;
+;--------------------------- Get IOBYTE Setting - 8 (8) --------------------;
+;BDOS put parameter in C before entering this routine
+ vSetIOBYTE:
+	LD		HL,IOBYTE					; point at The IOBYTE
+	LD		(HL),C						; Place new vale in it
+	RET
+;---------------------- Display $ terminated String - 9 (9) ----------------;
+;	This function outputs a string of characters to the console device. The	;
+; address of this string is in registers DE. You must make sure that the	;
+; last character of the string is "$"; the BDOS uses this character as a	;
+; marker for the end of the string. The "$" itself does not get output to	;
+; the console.																;
+;																			;
+; While the BDOS is outputting the string, it expands tabs as previously	;
+; described, checks to see if there is an incoming character, and checks	;
+; for	CONTROL-S (XOFF, which stops the output until another character is	;
+; entered) or CONTROL-P (which turns on or off echoing of console characters;
+; to	the printer).														;
+;																			;
+;			Function Code	:	C = 09H										;
+;			Entry Parameters:	DE = Address of the first byte of the string;
+;			Exit Parameters :	None										;
+;																			;
+;---------------------- Display $ terminated String - 9 (9) ----------------;
+vPrintString:
+	LD		HL,(paramDE)				; Get address of the string
+	LD		C,L
+	LD		B,H							; Put it into BC for call
+	CALL	Print						; out to console
+	RET
+;-------------------------- Read Console String - A (10) -------------------;
+;	This function reads a string of characters from the console device		;
+; and stores them in a buffer (address in DE) that you define. Full line	;
+; editing is possible: the operator can backspace, cancel the line and		;
+; start over, and use all the normal control functions. What you will		;
+; ultimately see in the buffer is the final version of the character string ;
+; entered, without any of the errors or control characters used to do the	;
+; line editing;																;
+;																			;
+;	The buffer that you define has a special format. The first byte in the	;
+; buffer tells the BDOS the maximum number of characters to be accepted.	;
+; The second byte is reserved for the BDOS to tell you how many characters	;
+; were actually placed in the buffer. The following bytes contain			;
+; the characters of the string. Character input will cease either when a	;
+; CARRIAGE RETURN is entered or when the maximum number of characters,		;
+; as specified in the buffer, has been received. The CARRIAGE RETURN is not ;
+; stored in the buffer as a character-it just serves as a terminator. If	;
+; the first character entered is a CARRIAGE RETURN, then the BDOS sets		;
+; the "characters input" byte to O. If you attempt to input more than the	;
+; maximum number of characters, the "characters input" count will be the	;
+; same as the maximum value allowed.										;
+;																			;
+;			Function Code	:	C = 0AH										;
+;			Entry Parameters:	DE = Address string buffer					;
+;			Exit Parameters :	String Buffer with console bytes in it		;
+;																			;
+;-------------------------- Read Console String - A (10) -------------------;
+ vReadString:
+	CALL	ReadString
+	RET
+;------------------------- Read Console Status - B (11) --------------------;
+; This function tells you whether a console input character is waiting to	;
+; be processed. Unlike the Console Input functions, which will wait until	;
+; there is input,this function simply checks and returns immediately.		;
+;																			;
+;			Function Code	:	C = 0BH										;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	A = 00H if no incoming Data					;
+;								A = FFH	if incoming Data					;
+;																			;
+;------------------------- Read Console Status - B (11) --------------------;
+vGetConsoleStatus:
+	CALL	ConBreak
+	LD		(exitParameterByte),A
+	RET
+;--------------------------- Get CP/M Version - C (12) ---------------------;
+;	This function tells you which version of CP/M you are currently running.;
+; A two-byte value is returned:												;
+;	H = OOH for CP/M, H = OlH for MP/M										;
+;	L = OOH for all releases before CP/M 2.0								;
+;	L = 20H for CP/M 2.0,21 H for 2.1, 22H for 2.2,							;
+;		and so on for any subsequent releases.								;
+;																			;
+; This information is of interest only if your program has some version		;
+; specific logic built into it. For example, CP/M version 1.4 does not		;
+; support the same Random File Input/ Output operations that CP/M 2.2 does.	;
+; Therefore, if your program uses Random I/O, put this check at the			;
+; beginning to ensure that it is indeed running under the appropriate		;
+; version of CP/M.															;
+;																			;
+;			Function Code	:	C = 0CH										;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	HL =Version Number Code						;
+;								A = FFH	if incoming Data					;
+;																			;
+;--------------------------- Get CP/M Version - C (12) ---------------------;
+ vGetVersion:								; func12 (12 - 0C)	Get Version
+	LD		A,VERSION
+	LD		(exitParameterByte),A 			;exitParameterByte = VERSION
+	RET
+;--------------------------- Get/Set User Number - 20 (32) -----------------;
+;	This subroutine either sets or gets the current user number. The current;
+; user number determines which file directory entries are matched during all;
+; disk file operations. When you call this function, the contents of the	;
+; E register specify what action is to be taken. IfE=OFFH, then the function;
+; will return the current user number in the A register. If you set E to a	;
+; number in the range 0 to 15 (that is, a valid user number), the function	;
+; will set the current user number to this value.							;
+;																			;
+;			Function Code	:	C = 0CH										;
+;			Entry Parameters:	E = 0FFH to get User Number					;
+;									= 0 to 15 to set User Number			;
+;			Exit Parameters :	A = Current user Number if E was set to 0FFH;
+;								A = FFH	if incoming Data					;
+;																			;
+;																			;
+;--------------------------- Get/Set User Number - 20 (32) -----------------;
+vGetSetUserNumber:
+	LD		A,(paramE)
+	CP		0FFH
+	JR		NZ,SetUserNumber				; interrogate user code instead
+	LD		A,(currentUserNumber)
+	LD		(exitParameterByte),A		; exitParameterByte=currentUserNumber
+	RET
+SetUserNumber:
+	AND		LO_NIBBLE_MASK
+	LD		(currentUserNumber),A
+	RET
+;***************************************************************************;
+;								Character Support Routines					;
+;***************************************************************************;
+;-------------------- Return a Character from the console ------------------;
+;return byte from buffer or read from the console							;
+ConIn:																		;
+	LD		HL,keyboardByte 			; is there a Byte waiting?			;
+	LD		A,(HL)															;
+	LD		(HL),0															;
+	OR		A																;
+	RET		NZ																;
+																			;
+	JP		bcConin						; Go get byte from Console			;
+;-------------------- Return a Character from the console ------------------;
+;----------- Is the Character ASCII printable, CR,LF,TAB,BACKSPACE ---------;
+; Resets Carry Flag if ASCII Printable, CR,LF,TAB,BackSpace or GE SPACE	;
+IsPrintableASCII:															;
+	CP	CR																	;
+	RET	Z; carriage return?													;
+	CP	LF																	;
+	RET	Z; line feed?														;
+	CP	TAB																	;
+	RET	Z; TAB?																;
+	CP	CTRL_H																;
+	RET	Z; backspace?														;
+	CP	SPACE						; Reset Carry if ASCII printable		;
+	RET																		;
+;----------- Is the Character ASCII printable, CR,LF,TAB,BACKSPACE ---------;
+;------------------ Print character from (BC) until	$ found ----------------;
+Print:																		;
+	LD		A,(BC)						; Get the next character			;
+	CP		DOLLAR						; Is it the end ?					;
+	RET	Z								;	exit if yes						;
+	INC		BC							; Update the pointer				;
+	PUSH	BC							; Save it							;
+	LD		C,A							; Does Byte require					;
+	CALL	TabOut						;	special attention - check		;
+	POP		BC							; Retrieve the pointer				;
+	JR		Print						; Loop back							;
+;------------------ Print character from (BC) until	$ found ----------------;
+;-- Send printable character to console. Precede with Caret if needed ------;
+; character is in Reg C														;
+CaretOut:																	;
+	LD		A,C																;
+	CALL	IsPrintableASCII												;
+	JR		NC,TabOut					; Skip if Caret not needed			;
+; send preceding up arrow													;
+	PUSH	AF							; Save the character				;
+	LD		C,CARET															;
+	CALL	ConsoleOut					; Send Caret to Console				;
+	POP		AF							; Get the character					;
+	OR		40H							; Make the graphic a letter			;
+	LD		C,A							; Set up to print					;
+; fall thru to TabbOut														;
+;-- Send printable character to console. Precede with Caret if needed ------;
+;------------- Send printable character to console. Expand if TAB ----------;
+; character is in Reg C														;
+ TabOut:																	;
+	LD		A,C																;
+	CP		TAB							; Is it a TAB						;
+	JP		NZ,ConsoleOut				; Go directly to ConsoleOut if not	;
+																			;
+ ; TAB encountered															;
+ TabOut0:																	;
+	LD		C,SPACE						; Expand TABs with SPACEs			;
+	CALL	ConsoleOut					; Send to Console					;
+	LD		A,(columnPosition)			; Get Column position				;
+	AND		111b						; (ColumnPosition mod 8) = 0 ?		;
+	JR		NZ,TabOut0					; Do again if not					;
+	RET																		;
+;------------- Send printable character to console. Expand if TAB ----------;
+;-------------------------- Send character to console ----------------------;
+; C	= Character to be output												;
+ConsoleOut:																	;
+; Look for CNTL_S from keyboard and save it in keyboardByte					;
+	PUSH	BC							; Save character and Count			;
+	CALL	ConBreak					; Check for screen stop key stroke	;
+	POP		BC																;
+	PUSH	BC							; Get/save character				;
+; Send character to Console													;
+	CALL	bcConout					; Send character to the console		;
+	POP		BC																;
+	PUSH	BC							; Get/save character				;
+; is the data to be output to print device?									;
+	LD		A,(printEchoFlag)												;
+	OR		A																;
+	CALL	NZ,bcList					; Send it to printer, if so			;
+	POP		BC							; Get the character					;
+																			;
+	LD		A,C							; Put character to ACC				;
+	LD		HL,columnPosition			; A = char, HL = .columnPosition	;
+	INC		M							; increment the ColumnPosition		;
+																			;
+	CP		SPACE															;
+	RET		NC							; Exit if ASCII printable			;
+																			;
+	CP		LF																;
+	RET		NZ							; Exit if not a Line Feed			;
+																			;
+	LD		(HL),0						;	else force columnPosition = 0	;
+	RET																		;
+;-------------------------- Send character to console ----------------------;
+;--------------------	Check for Status and Control S or C ----------------;
+;	Returns:																;
+;			ACC = 0FFH if Saved keyboard byte or CNTL_S entered from console;
+;			ACC = 00	No data Pending										;
+;			DOES NOT RETURN if CTRL_C is entered from the keyboard			;
+;																			;
+ ConBreak:																	;
+	LD		A,(keyboardByte)												;
+	OR		A							; If there is a char waiting		;
+	JR		NZ,ConBreak1 				;	return with FF in ACC			;
+																			;
+	CALL	bcConst						; Get status						;
+	CP		00H							; If 00 => No data pending			;
+	RET		Z							; Return 00 No data pending			;
+																			;
+	CALL	bcConin						; Read the byte						;
+																			;
+	CP		CTRL_P															;
+	JR		NZ,CheckCTL_S													;
+;<><><><><><><><><><><><><> Toggle Print Echo Flag<><><><><><><>			;
+	LD		HL,printEchoFlag												;
+	LD		A,TRUE															;
+	CP		(HL)															;
+	JR		NZ,ToggleFlag1													;
+	LD		A,FALSE															;
+ToggleFlag1:																;
+	LD		(HL),A															;
+	JR		NothingWaiting													;
+;<><><><><><><><><><><><><> Toggle Print Echo Flag<><><><><><><>			;
+CheckCTL_S:																	;
+	CP		CTRL_S						; If it is not Stop Screen, save	;
+	JR		NZ,ConBreak0				;	and and return 0FFH				;
+																			;
+	CALL	bcConin						; Else Read next byte				;
+	CP		CTRL_C															;
+	JP		Z,WarmBoot					; do WarmBoot if	CTRL_C			;
+ NothingWaiting:															;
+	XOR		A																;
+	RET									; Set ACC = 0 and return			;
+ ConBreak0:																	;
+	LD		(keyboardByte),A			; save the byte						;
+ ConBreak1:																	;
+	LD		A,TRUE						; return with true set in ACC		;
+	RET																		;
+;--------------------	Check for Status and Control S or C ----------------;
+;------------------------	Console Output Utilities -----------------------;
+showHashCRLF:																;
+	LD		C,HASH_TAG														;
+	CALL	ConsoleOut					; Send # to console					;
+	CALL	showCRLF														;
+showHashCRLF1:																;
+	LD		A,columnPosition												;
+	LD		HL,startingColumn												;
+	CP		A,M																;
+	RET		NC																;
+	LD		C,SPACE															;
+	CALL	ConsoleOut														;
+	JR		showHashCRLF1													;
+;------------------------	Console Output Utilities -----------------------;
+;------------------------	Send Carriage Return and Line Feed -------------;
+showCRLF:																	;
+	LD		C,CR															;
+	CALL	ConsoleOut														;
+	LD		C,LF															;
+		JP		ConsoleOut					; exit via ConsoleOuts RET		;
+;------------------------	Send Carriage Return and Line Feed -------------;
+;------------------------- Read a $ terminated String ----------------------;
+	 ;read to paramDE address (max length, current length, buffer)			;
+	ReadString:																;
+	LD		A,(columnPosition)												;
+	LD		(startingColumn),A			; Save start for CTRL_X and CTRL_R	;
+	LD		HL,(paramDE)				; Get the start of the String		;
+	LD		C,(HL)						; Get Max Count						;
+	INC		HL							; Point at actual bytes read		;
+	LD		B,0							; Initialize Current Count			;
+																			;
+	; B = Current Count														;
+	; C = Maximum characters												;
+	; HL= Insertion Pointer													;
+																			;
+ ; read next character, BC, HL active										;
+ReadNext:																	;
+	PUSH	BC							; Save Current Index and Max Count	;
+	PUSH	HL							; Save pointer						;
+ReadNext0:																	;
+	CALL	ConIn						; Get the next Character			;
+	AND		ASCII_MASK					; Mask parity bit					;
+	POP		HL							; Restore Pointer					;
+	POP		BC							; Current Index and Max Count		;
+;Is It Carriage Return														;
+	CP		CR																;
+	JR		Z,EndRead					; End the read if yes				;
+	CP		LF																;
+;Is It Linefeed																;
+	JR		Z,EndRead					; End the read if yes				;
+;Is It BackSpace															;
+	CP		CTRL_H															;
+	JR		Z,BSspaceBS														;
+IsItRubout:																	;
+	CP		RUBOUT						; Non destructive delete			;
+	JR		Z,ItIsRubout													;
+IsPhysicalEOL:																;
+	CP		CTRL_E															;
+	JR		Z,ItIsPhysicalEOL												;
+IsItPrintToggle:															;
+	CP		CTRL_P															;
+	JR		Z,ItIsPrintToggle												;
+IsItDeleteTheLineX:															;
+	CP		CTRL_X															;
+	JR		Z,DeleteTheLine				; If CTRL_X go delete the line		;
+IsItDeleteTheLineU:															;
+	CP		CTRL_U															;
+	JP		Z,IgnoreTheLine				; If CTRL_U ignore the line			;
+;Retype the line															;
+	CP		CTRL_R 															;
+	JR		Z,RepeatLine													;
+																			;
+;....................... Echo input back to the Console	....................;
+; Full Duplex																;
+; A = Character to display													;
+; B = current char count													;
+; C = maximum buffer length													;
+; HL= buffer pointer														;
+;ReadEcho																	;
+	INC		B							; Increment byte count				;
+	INC		HL							; Advance the Pointer				;
+	LD		(HL),A						; Put char in buffer				;
+																			;
+ReadEchoRubOut:																;
+		PUSH	BC							; Save index and length			;
+	PUSH	HL							; Save the Pointer					;
+	LD		C,A							; Get char							;
+	CALL	CaretOut					; Output to Console (^ if needed)	;
+	POP		HL							; Restore the Pointer				;
+	POP		BC							; Restore index and length			;
+	LD		A,(HL)						; Recall char						;
+; check for Warm Boot														;
+	CP		CTRL_C															;
+	LD		A,B							; Get Line position					;
+	JR		NZ,AreWeAtEndOfBuffer		; Skip if not CTRL_C				;
+	CP		1							; Beginning of the Line?			;
+	JP		Z,WarmBoot					;	if yes do the Boot				;
+; Check to see if we are at the end of the buffer							;
+AreWeAtEndOfBuffer:															;
+	CP		C							; Over Max ?						;
+	JR		C,ReadNext					;	no, Go for more					;
+																			;
+; At the end of read														;
+EndRead:																	;
+; 	POP		HL																;
+	LD		HL,(paramDE)													;
+	INC		HL																;
+																			;
+	LD		(HL),B						; Actual length at Pos 0 of Buffer	;
+	LD		C,CR															;
+	JP		ConsoleOut					; Send CR to the Console			;
+;....................... Echo input back to the Console	....................;
+;.......................... Backspace SPACE BackSpace ......................;
+BSspaceBS:																	;
+	DEC		B																;
+	DEC		HL																;
+	PUSH	BC																;
+	PUSH	HL																;
+	CALL	BackUp															;
+	JR		ReadNext0														;
+;.......................... Backspace SPACE BackSpace ......................;
+;.......................... It is RubOut ...................................;
+ItIsRubout:																	;
+; RUBOUT if possible														;
+	LD		A,B							; Are we at the start of the line	;
+	OR		A																;
+	JR		Z,ReadNext					; then ignore and go for next char	;
+;adjust pointers back one													;
+	LD		A,(HL)						; ACC = current character			;
+	DEC		B							; Adjust the index					;
+	DEC		HL							; Adjust the pointer				;
+	JR		ReadEchoRubOut				; Echo back - Full Duplex			;
+;.......................... It is RubOut ...................................;
+;.......................... It is PhysicalEOL ..............................;
+ItIsPhysicalEOL:															;
+	PUSH	BC							; Save Current Index and Max Count	;
+	PUSH	HL							; Save pointer						;
+	CALL	showCRLF					; Make new line						;
+	JR		ReadNext0					;	and go for next char			;
+;.......................... It is PhysicalEOL ..............................;
+;.......................... It is PrintToggle ..............................;
+ItIsPrintToggle:															;
+	PUSH	HL							; Save pointer						;
+; Toggle the printEcho Flag													;
+	LD		HL,printEchoFlag			; Point at the flag					;
+	LD		A,TRUE						; Load ACC with TRUE				;
+	CP		(HL)						; Is the flag true?					;
+	JR		NZ,IsItPrintToggle1			; Skip if not						;
+	LD		A,FALSE						;	else. load ACC with FALSE		;
+IsItPrintToggle1:															;
+	LD		(HL),A						; Set the Flags new Value			;
+	POP		HL							; Restore pointer					;
+	JR		ReadNext					;	and for another char			;
+;.......................... It is PrintToggle ..............................;
+;.......................... RepeatLine .....................................;
+RepeatLine:																	;
+	PUSH	BC							; Save Current Index and Max Count	;
+	PUSH	HL							;	for exit						;
+	CALL	showHashCRLF				; Display Hash, new Line			;
+																			;
+	LD		HL,(paramDE)				; Get start of Buffer				;
+	INC		HL							; Skip past character count			;
+																			;
+LL1:																		;
+	INC		HL							; Point at next char to display		;
+	PUSH	BC							; Save counter, in B				;
+	PUSH	HL							; Save buffer pointer				;
+	LD		C,M							; Get the next character			;
+	CALL	CaretOut					; Display it						;
+	POP		HL							; Restore							;
+	POP		BC							;	the counter and pointer			;
+	DJNZ	LL1							; loop if still more to show		;
+	POP		HL							; Restore values					;
+	POP		BC							;	from routine entry				;
+	JP		ReadNext					; Done here !						;
+;.......................... RepeatLine .....................................;
+;.......................... Delete The Line ................................;
+DeleteTheLine:																;
+	POP		HL							; Adjust Stack						;
+								;											;
+DeleteTheLine1:																;
+	LD		A,(startingColumn)												;
+	LD		HL,columnPosition												;
+	CP		M							; Start of line ?					;
+	JP		NC,ReadString				;	If yes get out and go for more	;
+	DEC		M							; Adjust the ColumnPosition			;
+	CALL	BackUp						; Clear 1 column					;
+	JR		DeleteTheLine1				; Loop for more						;
+;.......................... Delete The Line ................................;
+;------------------------ Back-up one screen position ----------------------;
+BackUp:																		;
+		CALL	BackUp1						; Send Backspace				;
+	LD		C,SPACE						; Overwrite with SPACE				;
+	CALL	bcConout					; Overwrite with SPACE				;
+;does not affect column count												;
+BackUp1:																	;
+	LD		C,CTRL_H														;
+	JP		bcConout					; Send Backspace					;
+;------------------------ Back-up one screen position ----------------------;
+;.......................... Ignore The Line ................................;
+IgnoreTheLine:																;
+	CALL	showHashCRLF				; Display Hash, new Line			;
+	LD		C,SPACE						; We want to add a few spaces		;
+	CALL	bcConout					;	to the console					;
+	LD		C,SPACE															;
+	CALL	bcConout														;
+	JP		ReadString					; Start all over					;
+;.......................... Ignore The Line ................................;
+;------------------------- Read a $ terminated String ----------------------;
+;****************************************************************************
+;							DATA AREA										*
+;****************************************************************************
+;------------------------------Non Disk Data Area --------------------------;
+usersStack:			DS	2				; entry stack pointer				;
+																			;
+keyboardByte:		DB	00				; Saved keyboard character			;
+																			;
+printEchoFlag:		DB	00				; Controlled by ^P					;
+																			;
+; FunctionValue:DB	00H					; Reg C on BDOS Entry				;
+startingColumn:		DB	0				; Starting col pos after read		;
+columnPosition:		DB	0				; Current Column position			;
+																			;
+paramE:				DS	BYTE			; Byte Argument for BDOS Call		;
+paramDE:			DS	WORD			; Word Argument for BDOS Call		;
+exitParameterByte:						; Byte returned Value				;
+exitParameterWord:	DS	WORD				; Word							;
+																			;
+																			;
+;------------------------------------ Data Area ----------------------------;
+;***************************************************************************;
+;								Disk I/O									;
+;***************************************************************************;
+;---------------------------- Reset Disk System - D (13) -------------------;
+;	This function requests CP/M to completely reset the disk file system.	;
+; CP/M then resets its internal tables, selects logical disk A as the		;
+; default disk, resets the DMAaddress back to 0080H (the address of the		;
+; buffer used by the BDOS to read and write to the disk), and marks all		;
+; logical disks as having Read/Write status. The BDOS will then have to log	;
+; in each logical disk as each disk is accessed. This involves reading the	;
+; entire file directory for the disk and rebuilding the allocation vectors	;
+; which keep track of which allocation blocks are free and which			;
+; are used for file storage.												;
+;	Submit file is created by external command Submit. The file is			;
+; identified as $$$.SUB														;
+;																			;
+;			Function Code	:	C = 0DH										;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	A = 00H if no Submit File found				;
+;									= 0FFH if Submit file found				;
+;																			;
+;---------------------------- Reset Disk System - D (13) -------------------;
+vResetSystem:
+		LD		HL,0
+	LD		(readOnlyVector),HL			; Clear the vectors for
+	LD		(loggedDisks),HL			;	R/O and Logged Disks
+	XOR		A							; Clear the current disk
+	LD		(currentDisk),A
+; note that currentUserNumber remains unchanged
+	LD		HL,DMABuffer
+	LD		(initDAMAddress),HL			; initDAMAddress = DMABuffer
+	CALL	SetDataDMA					; to data DMA address
+	JP		Select
+;---------------------------- Select Disk - E (14) -------------------------;
+;	This function makes the logical disk named in register E the default	;
+; disk All subsequent references to disk files that do not specify the disk	;
+; will use this default. When you reference a disk file that does have an	;
+; explicit logical disk in its name you do not have to issue another		;
+; Select Disk function; the BDOS will take care of that for you.			;
+;																			;
+;	Notice the way in which the logical disk is specified in register E.	;
+; It is not the same as the disk drive specification in the first byte of	;
+; the file control block. In the FeB, a value ofOOH is used to mean			;
+; "use the current default disk" (as specified in the last Select Disk		;
+; call or by the operator on the console). With this function, a value		;
+; of OOH in register A means that A is the selected drive, a value of		;
+; 01H means drive B, and so on to OFR for drive P, allowing					;
+; 16 drives in the system.													;
+;																			;
+;			Function Code	:	C = 0EH									;
+;			Entry Parameters:	E = Logical Disk Code (00H = A,01H = B ..)	;
+;			Exit Parameters :	None										;
+;																			;
+;---------------------------- Select Disk - E (14) -------------------------;
+ vSelectDisk:
+	JP	SelectCurrent
+;---------------------------- Open File - F (15) ---------------------------;
+;	This function opens a specified file for reading or writing. The FCB,	;
+; whose address must be in register DE, tells CP/M the user number,			;
+; the logical disk, the file name, and the file type. All other bytes of	;
+; the FCB will normally be set to O.										;
+;	The code returned by the BDOS in register A indicates whether the file	;
+; has been opened successfully. If A contains OFFH, then the BOOS was		;
+; unable to find the correct entry in the directory. If A= 0,1,2, or 3,		;
+; then the file has been opened.											;
+;			Function Code	:	C	= 0FH									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A	= Directory Code						;
+;																			;
+;---------------------------- Open File - F (15) ---------------------------;
+ vOpenFile:
+	CALL	InitializeExtentNumberMSB	; Clear the Extent number
+	CALL	ReselectDisk				; do we need to reselect disk?
+	JP		OpenFile
+;---------------------------- Close File - 10 (16) -------------------------;
+;	This function terminates the processing of a file to which you have		;
+; written information. Under CP/M you do not need to close a file that you	;
+; have been reading. However, if you ever intend for your program to		;
+; function correctly under MP/M (the multi-user version of CP/M) you		;
+; should close all files regardless of their use.							;
+;	The Close File function, like Open File, returns a directory code in	;
+; the A register. Register A will contain OFFH if the BOOS could not		;
+; close the file successfully. If A is 0, 1, 2, or 3, then the file has	;
+; been closed.																;
+;																			;
+;	When the BDOS closes a file to which data has been written, it writes	;
+; the current contents of the FCB out to the disk directory, updating		;
+; an existing directory entry by matching the disk, name, type, and		;
+; extent number in the same manner that the Open File function does.		;
+; Note that the BDOS does not transfer the last record of the file to the	;
+; disk during the close operation. It merely updates the file directory.	;
+; You must arrange to flush any partly filled record to the disk. If the	;
+; file that you have created is a standard CP/M ASCII text file, you must	;
+; arrange to fill the unused portion of the record with the standard lAH	;
+; end-of-file characters as CP/M expects.									;
+;																			;
+;			Function Code	:	C	= 10H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A	= Directory Code						;
+;																			;
+;---------------------------- Close File - 10 (16) -------------------------;
+ vCloseFile:
+	CALL	ReselectDisk
+	JP		CloseDirEntry
+;---------------------Search for First Name Match - 11 (17) ----------------;
+;	This function scans down the file directory for the first entry that	;
+; matches the file name, type, and extent in the FCB addressed by DE.		;
+; The file name, type, and extent may contain a "?" (ASCII 3FH) in one or	;
+; more character positions. Where a "?" occurs, the BDOS will match any		;
+; character in the corresponding position in the file directory. This is	;
+; known as ambiguous file name matching.									;
+;	The first byte of an FCB normally contains the logical disk number code.;
+; A value of 0 indicates the default disk, while 1 means disk A, 2 is B,	;
+; and so on up to a possible maximum of 16 for disk P. However, if this		;
+; byte contains a "?", the BDOS will search the default logical disk and	;
+; will match the file name and type regardless of the user number. This		;
+; function is normally used in conjunction with the Search Next function.	;
+; Search First, in the process of matching a file, leaves certain			;
+; variables in the BDOS set, ready for a subsequent Search Next.			;
+;	Both Search First and Search Next return a directory code in the		;
+; A register. With Search First, A = OFFH when no files match the FCB,		;
+; if a file match is found, A will have a value of 0, I, 2, or 3.			;
+;																			;
+;	To locate the particular directory entry that either the Search First	;
+; or Search Next function matched, multiply the directory code returned		;
+; in A by the length of a directory entry (32 bytes). This is easily done	;
+; by adding the A register to itself five times. Then add the DMA address	;
+; to get the actual address where the matched directory entry is stored.	;
+;	There are many occasions when you may need to write a program that will	;
+; accept an ambiguous file name and operate on all of the file names that	;
+; match it. (The DIR and ERA commands built into the CCP are examples that	;
+; use ambiguous file names.) To do this, you must use several BDOS			;
+; functions: the Set DMA Address function (code 26), this function			;
+; (Search First), and Search Next (code 18). All of this is shown in the	;
+; subroutine given in Figure 5-17.											;
+;																			;
+;																			;
+;			Function Code	:	C	= 11H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A	= Directory Code						;
+;																			;
+;---------------------Search for First Name Match - 11 (17) ----------------;
+ vFindFirst:
+	LD		C,0							; Length assuming '?' true
+	LD		HL,(paramDE)				; Get the FCB
+	LD		A,(HL)						; DIsk/User No
+	CP		QMARK						; Does it contain '?' ?
+	JR		Z,QMarkFind					;	if Yes, skip disk reselect
+										;	and reset of EXT
+
+	CALL	InitializeExtentNumberMSB	; Set Ext to 0
+	CALL	ReselectDisk				; Use FCB to set currentDisk
+	LD		C,nameLength				; Match name,type and extent
+ QMarkFind:
+	CALL	SearchForDirectoryRecord	; Find the directory record
+	JP		CopyDirEntryToUserDMA		; Move it to the User's buffer
+;---------------------Search for Next Name Match - 12 (18) -----------------;
+;	This function searches down the file directory for the next file name,	;
+; type, and extent that match the FCB specified in a previous Search First	;
+; function call. Search First and Search Next are the only BDOS functions	;
+; that must be used together. As you can see, the Search Next function		;
+; does not require an FCB address as an input parameter-all the necessary	;
+; information will have been left in the BDOS on the Search First call.		;
+; Like Search First, Search Next returns a directory code in the A register,;
+; in this case, if A = OFFH, it means that there are no more files that		;
+; match the file control block. If A is not OFFH, it will be a value of		;
+; 0, 1, 2, or 3, indicating the relative directory entry number.			;
+;																			;
+;	There are two ways of using the Search First/ Next calls. Consider a	;
+; simple file copying program that takes as input an ambiguous file name.	;
+; You could scan the file directory, matching all of the possible file		;
+; names, possibly displaying them on the console, and storing the names of	;
+; the files to be copied in a table inside your program. This would have	;
+; the advantage of enabling you to present the file names to the operator	;
+; before any copying occurred. You could even arrange for the operator to	;
+; select which files to copy on a file-by-file basis. One disadvantage		;
+; would be that you could not accurately predict how many files might be	;
+; selected. On some hard disk systems you might have to accommodate several ;
+; thousand file names.														;
+;	The alternative way of handling the problem would be to match one file	;
+; name, copy it, then match the next file name, copy it, and so on. If you	;
+; gave the operator the choice of selecting which files to copy, this person;
+; would have to wait at the terminal as each file was being copied, but the ;
+; program would not need to have large table areas set aside to hold file	;
+; names. This solution to the problem is slightly more complicated, as you	;
+; can see from the logic in Figure 5-17.									;
+;	The subroutine in Figure 5-17, Get Next File (GNF), contains all of the	;
+; necessary logic to search down a directory for both alternatives described;
+; It does require that you indicate on entry whether it should search for	;
+; the first or next file match, by setting A to zero or some nonzero value	;
+; respectively.															;
+;	You can see from Figure 5-17 that whenever the subroutine is called to	;
+; get the next file, you must execute a Search First function to re-find	;
+; the	previous file. Only then can a Search Next be issued. As with all	;
+; functions that return a directory code in A, if this value is not OFFH, it;
+; will be the relative directory entry number in the directory record		;
+; currently in memory. This directory record will have been read into memory;
+; at whatever address was specified at the last Set DMA Address function	;
+; call. Notwithstanding its odd name, the DMA Address is simply the address ;
+; into which any record input from disk will be placed. If the Set DMA		;
+; Address function has not been used to change the value, then the CP/M	;
+; default DMA address, location 0080H, will be used to hold the directory	;
+; record.																	;
+;	The actual code for locating the address of the particular directory	;
+;	entry matched by the Search First/ Next functions is shown in Figure 5-17;
+;	near the label GNFC. The method involves multiplying the directory code	;
+;	by 32 and then adding this product to the current DMA address.			;
+;																			;
+;																			;
+;			Function Code	:	C	= 12H									;
+;			Entry Parameters:	None , Assume previous Search First Call	;
+;			Exit Parameters :	A	= Directory Code						;
+;																			;
+;---------------------Search for Next Name Match - 12 (18) -----------------;
+ vFindNext:
+	LD		HL,(searchAddress)			; Get Current Dir Entry
+	LD		(paramDE),HL				; Get the user's FCB
+	CALL	ReselectDisk				; Reselect if needed
+	CALL	GetNextDirectoryRecord		; Go find the next directory record
+	JP		CopyDirEntryToUserDMA		; Copy directory entry to user
+;--------------------------------Delete File - 13 (19) ---------------------;
+; This function logically deletes from the file directory files that match	;
+; the FCB addressed by DE. It does so by replacing the first byte of each	;
+; relevant directory entry (remember, a single file can have several		;
+; entries, one for each extent) by the value OE5H. This flags the directory ;
+; entry as being available for use.											;
+;																			;
+;	Like the previous two functions, Search First and Search Next, this		;
+; function can take an ambiguous file name and type as part of the			;
+; File Control Block, but unlike those functions, the logical disk select	;
+; code cannot be a"?". This function returns a directory code in A in the	;
+; same way as the previous file operations.									;
+;																			;
+;																			;
+;			Function Code	:	C	= 13H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A	= Directory Code						;
+;																			;
+;--------------------------------Delete File - 13 (19) ---------------------;
+vDeleteFile:
+	CALL	ReselectDisk				; Reselect if needed
+	CALL	CheckWrite					; Terminate with error if Disk R/O
+	LD		C,fcbExtIndex				; Load the extent number field
+	CALL	SearchForDirectoryRecord	; Look for directory entry
+DeleteFileLoop:
+	CALL	AtEndOfDirectory			; Have we worked thru all entries
+	JP		Z,DirLocationToReturnLoc	; Return directory Index to caller
+; set each non zero disk map entry to 0 in the allocation vector
+	CALL	CheckRODirectory			; Terminate with error if File R/O
+	CALL	GetCurrentDirectoryRecord	; Point to Directory Entry
+	LD		(HL),emptyDir				; Mark as Empty
+	LD		C,FALSE						; Set flag for remove
+	CALL	ScanDiskMap					; Reclaim Bisk Blocks, set to 0
+	CALL	WriteDir					; Update the directory
+	CALL	GetNextDirectoryRecord		; Look for more
+	JP		DeleteFileLoop				; Loop
+;----------------------------Read Sequential - 14 (20) ---------------------;
+;	This function reads the next record (l28-byte sector) from the 			;
+; designated file into memory at the address set by the last Set DMA		;
+; function call(code 26, lAH). The record read is specified by the FCB's	;
+; sequential record field. This field is incremented by 1 so that a			;
+; subsequent call to Read Sequential will get the next record from the		;
+; file. If the end of the current extent is reached, then the BDOS will		;
+; automatically open the next extent and reset the sequential record field	;
+; to 0, ready for the next Read function call.								;
+;	The file specified in the FCB must have been readied for input by		;
+; issuing an Open File (code 15, OFH) or a Create File (code 22, 16H)		;
+; BDOS call. The value OOH is returned in A to indicate a successful Read	;
+; Sequential operation, while a nonzero value shows that the Read could	;
+; not be completed because there was no data in the next record, as at the	;
+; end of file.																;
+;																			;
+;	Although it is not immediately obvious, you can change the sequential	;
+; record number, FCB$SEQREC, and within a given extent, read a record at	;
+; random. If you want to access any given record within a file, you must	;
+; compute which extent that record would be in and set the extent field in	;
+; the file control block (FCB$EXTENT) before you open the file. Thus,		;
+; although the function name implies sequential access, in practice you can ;
+; use it to perform a simple type of random access. If you need to do true	;
+; random access, look ahead to the Random Read function (code 33), which	;
+; takes care of opening the correct extent automatically.					;
+;	When you read data from a CP/M text file, the normal convention is to	;
+; fill the last record of the file with lAH characters (CONTROL-Z).			;
+; Therefore, two possible conditions can indicate end-of-file: either		;
+; encountering a IAH, or receiving a return code from the BDOS function		;
+; (in the A register) of OFFH. However, if the file that you are reading	;
+; is not an ASCII text file, then a IAH character has no special meaning,	;
+; it is just a normal data byte in the body of the file.					;
+;																			;
+;			Function Code	:	C	= 14H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A	= 0	=> Success							;
+;									<> 0	=> No data read, Probably EOF	;
+;																			;
+;----------------------------Read Sequential - 14 (20) ---------------------;
+vReadSeq:
+	CALL	ReselectDisk				; Reselect if needed
+;ReadSeq:
+	LD		A,SEQ_ACCESS
+	LD		(diskAccessType),A			; Set flag as sequential Disk I/O
+DiskRead:
+	LD		A,TRUE
+	LD		(readModeFlag),A			; Set Flag for read
+	CALL	SetRecordVars				; Set variables for current FCB
+	LD		A,(currentFileRecord)
+	LD		HL,fcbRecordCount
+	CP		M							; is File Record < fcbRecordCount
+	JP		C,RecordOK					; skip if	yes
+ ; not enough records in the extent
+	CP		RecordsPerExtent			; Is record count the Max ?
+	JR		NZ,NothingRead					;	No, Exit with EOF
+	CALL	OpenNextExt					; Need to open the next extent
+	XOR		A
+	LD		(currentFileRecord),A		; Reset the record count
+	LD		A,(exitParameterByte)		; Was it a good Open
+	OR		A
+	JR		NZ,NothingRead					;	exit if No
+ RecordOK:
+	CALL	GetBlockNumber				; Put it in absoluteCPMRecord
+	CALL	WasBlockAllocated			; Was it a good Allocation ?
+	JR		Z,NothingRead					; get out if not allocated
+	CALL	SetActualRecordAdd			; Absolute CPM Record
+	CALL	Seek						; Go to proper track,sector
+	CALL	ReadBuffer					; Read into DMA address
+	CALL	UpdateRecordVariables		; update Record info
+	RET
+ NothingRead:
+	JP		SetExitParamTo1				; No Data read
+;----------------------------Write Sequential - 15 (21) --------------------;
+;	This function writes a record from the address specified in the last Set;
+; DMA (code 26, lAH) function call to the file defined in the FCB. The		;
+; sequential record number in the FCB (RC) is updated by 1 so that			;
+; the next call to Write Sequential will write to the next record position	;
+; in the file. If necessary, a new extent will be opened to receive the new ;
+; record.																	;
+;	This function is directly analogous to the Read Sequential function,	;
+; writing instead of reading. The file specified in the FCB must first be	;
+; activated by an Open File (code 15,OFH) or create File call (code 22,16H).;
+;	A directory code of OOH is returned in A to indicate that the Write was	;
+; successful, a nonzero value is returned if the Write could not be			;
+; completed because the disk was full.										;
+;																			;
+;	As with the Read Sequential function (code 20, 14H), you can achieve	;
+; a simple form of random writing to the file by manipulating the			;
+; sequential record number (RC). However, you can only overwrite existing	;
+; records in the file, and if you want to move to another extent, you		;
+; must close the file and reopen it with the FCB$EXTENT field set to the	;
+; correct value.															;
+;	The only logical error condition that can occur when writing to a file	;
+; is insufficient room on the disk to accommodate the next extent of the	;
+; file. Any hardware errors detected will be handled by the disk driver		;
+; built into the BIOS or BDOS.												;
+;																			;
+;																			;
+;			Function Code	:	C	= 15H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A	= 0	=> Success							;
+;									<> 0	=> No data read, Probably EOF	;
+;																			;
+;----------------------------Write Sequential - 15 (21) --------------------;
+ vWriteSeq:
+	CALL	ReselectDisk				; Reselect if needed
+DiskWriteSeq:
+	LD		A,SEQ_ACCESS
+	LD		(diskAccessType),A			; Set flag as sequential Disk I/O
+DiskWrite:
+	LD		A,FALSE
+	LD		(readModeFlag),A			; Set Flag for Write
+	CALL	CheckWrite					; Terminate with error if Disk R/O
+	LD		HL,(paramDE)				; Put FCB in HL
+	CALL	CheckROFile					; Terminate with error if File R/O
+	CALL	SetRecordVars				; Set variables for current FCB
+	LD		A,(currentFileRecord)		; Get current record number
+	CP		highestRecordNumber + 1		; Is it still in the same extent?
+	JP		NC,SetExitParamTo1			; Exit with NO WRITE set
+	CALL	GetBlockNumber				; Compute disk block number
+	CALL	WasBlockAllocated			; Is it really allocated ?
+	LD		C,WriteAllocated			; Assume a normal write operation
+	JP		NZ,HaveWriteBlock			;	Skip if block already allocated
+	CALL	GetDiskMapIndex				; Disk Map Index in ACC
+	LD		(diskMapIndex),A			; Save it
+	LD		BC,0000h					; Anticipate using 0000
+	OR		A							; Is it block 0?
+	JR		Z,FindAvailableBlock		;	skip if yes
+	LD		C,A							;	else a previous block exists
+	DEC		BC							; Adjust the index
+	CALL	GetDiskMapValue				; Put previous block # into HL
+	LD		B,H							; Move previous block
+	LD		C,L							;	number into BC
+FindAvailableBlock:
+	CALL	GetClosestBlock				; Block number in HL
+	LD		A,L							; If no available blocks HL
+	OR		H							;	HL set to 0000H
+	JR		NZ,FoundAvailableBlock		; Skip if found
+	LD		A,2							; Load return value
+	LD		(exitParameterByte),A		; Save for caller
+	RET									; Exit with exitParameterByte=2
+FoundAvailableBlock:
+	LD		(absoluteCPMRecord),HL		; Save the block number
+	EX		DE,HL						; block number to DE (E)
+	LD		HL,(paramDE)				; HL at FCB
+	LD		BC,fcbDiskMapIndex			; Index to start of FCB Map
+	ADD		HL,BC						; HL=.start of FCB Map
+	LD		A,(diskMapIndex)			; Get target block index
+	LD		C,A							; Map index to C
+	LD		B,0							; Set MSB to 00
+	ADD		HL,BC						; Calculate 8 bit block's location
+	LD		A,(byteAllocationFlag)		; Get allocation size flag
+	OR		A							; Test it
+	JR		Z,Allocate16Bit				; Skip if allocating word
+	LD		(HL),E						; Update the Map
+	JR		MarkNewBlock				; Skip 16 bit calculations
+Allocate16Bit:
+	ADD		HL,BC						; Adjust for 16 bit value
+	LD		(HL),D						; Save MSB
+	INC		HL
+	LD		(HL),E						; SAVE LSB
+MarkNewBlock:
+	CALL	ResetFileWriteFlag
+	LD		C,WriteCleanBuffer			; Marked as unallocated write
+HaveWriteBlock:
+	LD		A,(exitParameterByte)
+	OR		A
+	RET		NZ							; Exit if non zero returned value ??
+	PUSH	BC							; Write flag (in C)
+	CALL	SetActualRecordAdd			; Set absoluteCPMRecord
+	CALL	Seek						; Seek to o proper file position
+	POP		BC							; Write flag (in C)
+	PUSH	BC							; Write flag (in C)
+	CALL	WriteBuffer					; Write buffer and check result
+	POP		BC							; Write flag (in C)
+	LD		A,(currentFileRecord)		; Get the current record
+	LD		HL,fcbRecordCount			; Get the starting FCB record count
+	CP		M							; Current File Record > fcbRecordCount
+	JR		C,DiskWrite1				;	skip if yes
+ 	LD		(HL),A						; update the FCB RC
+	INC		M							; fcbRecordCount = current File Record+1
+	LD		C,WriteCleanBuffer			; Marked as unallocated write
+DiskWrite1:
+; A has current File Record, C=2 if new block or new record#
+	DEC		C
+	DEC		C							; Check if C = unallocated write
+	JR		NZ,DiskWrite2				; Skip if C not unallocated write
+	PUSH	AF							; currentFileRecord
+	CALL	ResetFileWriteFlag
+;	CALL	GetWriteFileFlagValue		; HL points to FCB s2
+;	RES		7,(HL)						; Reset WriteFileFlag
+	POP		AF							; currentFileRecord
+DiskWrite2:
+; check for end of extent, if found attempt
+; to open next extent in preparation for next write
+	CP		highestRecordNumber			; Space for more records ?
+	JR		NZ,DiskWriteCleanup			;	finish up if Yes
+	LD		A,(diskAccessType)			; Is this using Random Access
+	OR		A
+	JR		Z,DiskWriteCleanup			;	finish up if Yes
+	CALL	UpdateRecordVariables		; Update variables from I/O in	FCB
+	CALL	OpenNextExt					; Acc = 0 OK, Acc = 1 Failed
+	LD		HL,exitParameterByte
+	LD		A,(HL)						; Put Open	result in parameter
+	OR		A							; Is it 00
+	JR		NZ,DiskWriteCleanup0		;	no, skip currentRecord update
+	DEC		A							; A gets FF
+	LD		(currentFileRecord),A		; Update currentFileRecord
+ DiskWriteCleanup0:
+	LD		(HL),0						; Set exitParameterByte
+ DiskWriteCleanup:
+	JP		UpdateRecordVariables		; update variables from I/O in	FCB
+;--------------------------------- Make File - 16 (22) ---------------------;
+;	This function creates a new file of the specified name and type. You	;
+; must first ensure that no file of the same name and type already exists	;
+; on the same logical disk, either by trying to open the file (if this		;
+; succeeds, the file already exists) or by unconditionally erasing the file.;
+;	In addition to creating the file and its associated file directory entry;
+; this function also effectively opens the file so that it is ready for	;	;
+; records to be written to it.												;
+;	This function returns a normal directory code if the file creation has	;
+; completed successfully or a value of OFFH if there is insufficient		;
+; disk or directory space.													;
+;	Note that this function cannot accept an ambiguous file name in the FCB. ;
+;																			;
+;																			;
+;			Function Code	:	C	= 16H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A	= Directory Code						;
+;---------------------------- Make File - 16 (22) --------------------------;
+vMakeFile:
+	CALL	InitializeExtentNumberMSB	; Clear the Extent number
+	CALL	ReselectDisk				; Reselect if needed
+	JP		MakeNewFile					; Go Make it
+;-------------------------- Rename File - 17 (23) --------------------------;
+;	This function renames an existing file name and type to a new name and	;
+; type. It is unusual in that it uses a single FCB to store both the old	;
+; file name and type (in the first 16 bytes) and the new file name and type ;
+; (in the second 16 bytes).													;
+;	This function returns a normal directory code if the file rename was	;
+; completed successfully or a value of OFFH if the old file name could not	;
+; be found.																	;
+;																			;
+;	The Rename File function only checks that the old file name and type	;
+; exist; it makes no check to ensure that the new name and type combination ;
+; does not already exist. Therefore, you should try to open the new file	;
+; name and type. If you succeed, do not attempt the rename operation.		;
+; CP/M will create more than one file of the same name and type, and you	;
+; stand to lose the information in both files as you attempt to sort out	;
+; the problem.																;
+;	Never use ambiguous file names in a rename operation; it produces strange;
+; effects and may result in files being irreparably damaged. This function	;
+; will change all occurrences of the old file name to the new name.			;
+;																			;
+;																			;
+;			Function Code	:	C	= 17H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A	= Directory Code						;
+;																			;
+;-------------------------- Rename File - 17 (23) --------------------------;
+vRenameFile:
+	CALL	ReselectDisk				; Reselect if needed
+	CALL	CheckWrite					; Terminate with error if Disk R/O
+	LD		C,fcbExtIndex				; Match user#, Name & Type only
+	CALL	SearchForDirectoryRecord
+; Move the old use number to the new entry (2nd half of FCB)
+	LD		HL,(paramDE)				; FCB pointer
+	LD		A,(HL)						; First byte of Dir entry
+	LD		DE,fcbDiskMapIndex			; Use second half of FCB
+	ADD		HL,DE						; Point at the second half of FCB
+	LD		(HL),A						; Put into new name user position
+RenameLoop:
+	CALL	AtEndOfDirectory			; If have we checked the whole dir
+	JP		Z,DirLocationToReturnLoc		;	return directory Index to caller
+; process this match
+	CALL	CheckRODirectory			; Terminate with error if File R/O
+	LD		C,fcbDiskMapIndex			; Set starting position
+	LD		E,fcbExtIndex				; Set Length
+	CALL	CopyDir						; copy from FCB to dir entry
+; element renamed, look for more
+	CALL	GetNextDirectoryRecord		; Look for more dir entries
+	JR		RenameLoop					; Loop
+;---------------------------- Get Active Disks - 18 (24) -------------------;
+; This function returns a bit map, called the login vector, in register		;
+; pair	HL, indicating which logical disk drives have been selected since	;
+; the last	warm boot or Reset Disk function (code 13, ODH). The least		;
+; significant bit of L corresponds to disk A, while the highest order bit	;
+; in H maps disk P. The bit corresponding to the specific logical disk is	;
+; set to 1 if the disk has been selected or to 0 if the disk is not			;
+; currently on-line.														;
+;	Logical disks can be selected programmatically through any file			;
+; operation	that sets the drive field to a nonzero value, through the		;
+; Select Disk function (code 14, OEH), or by the operator entering an		;
+; "X:" command where "X" is equal to A, B, ... , P.							;
+;																			;
+;			Function Code	:	C = 018H									;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	HL = Active disk map (login vector)			;
+;																			;
+;---------------------------- Get Active Disks - 18 (24) -------------------;
+vGetLoginVector:
+	LD		HL,(loggedDisks)
+	LD		(exitParameterWord),HL
+	RET
+;---------------------------- Get Current Disk- 19 (25) --------------------;
+;	This function returns the current default disk set by the last Select	;
+; Disk function call (code 14, OEH) or by the operator entering the			;
+; "X:"command (where "X" is A, B, ..., P) to the CCP.						;
+;																			;
+;	This function returns the current default disk in coded form.			;
+; Register A= 0 if drive A is the current drive, I if drive B, and so on.	;
+; If you need to convert this to the corresponding ASCII character, simply	;
+; add 41H to register A. Use this function when you convert a file name and ;
+; type in an FCB to an ASCII string in order to display it. If the first	;
+; byte of the FCB is OOH, the current default drive is to be used.			;
+; You must therefore use this function to determine the logical disk letter ;
+; for the default drive.													;
+;																			;
+;			Function Code	:	C = 019H									;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	A = Current Disk (0=A,1=B...,F=P)			;
+;																			;
+;---------------------------- Get Current Disk- 19 (25) --------------------;
+vGetCurrentDisk:
+	LD		A,(currentDisk)
+	LD		(exitParameterByte),A
+	RET
+;---------------------------- Set DMA Address - 1A (26) --------------------;
+;	This function sets the BDOS's direct memory access (DMA) address to a new;
+; value. The name is an historic relic dating back to the Intel Development ;
+; System on which CP/M was originally developed. This machine, by virtue of ;
+; its hardware, could read data from a diskette directly into memory or		;
+; write data to a diskette directly from memory. The name DMA address now	;
+; applies to the address of the buffer to and from which data is			;
+; transferred whenever a diskette Read, Write, or directory operation is	;
+; performed. Whenever CP/M first starts up (cold boot) m a warm boot or		;
+; Reset Disk operation occurs, the DMA address is reset to its default		;
+; value of 0080H.															;
+;																			;
+;			Function Code	:	C = 0A9H									;
+;			Entry Parameters:	DE = DMA Address							;
+;			Exit Parameters :	None										;
+;																			;
+;---------------------------- Set DMA Address - 1A (26) --------------------;
+vSetDMA:
+	LD		HL,(paramDE)
+	LD		(initDAMAddress),HL
+	JP		SetDataDMA
+;---------------------------- Get Allocation Vector - 1B (27) --------------;
+;	This function returns the base, or starting, address of the allocation	;
+; vector for the currently selected logical disk. This information,			;
+; indicating which parts of the disk are assigned, is used by utility		;
+; programs and the BDOS itself to determine how much unused space is on the ;
+; logical disk, to locate an unused allocation block in order to extend		;
+; a file, or to relinquish an allocation block when a file is deleted.		;
+;																			;
+;			Function Code	:	C = 01BH									;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	HL = Address of allocation vector			;
+;																			;
+;---------------------------- Get Allocation Vector - 1B (27) --------------;
+vGetAllocAddr:
+	LD		HL,(caAllocVector)
+	LD		(exitParameterWord),HL
+	RET
+;---------------------------- Write Protect Disk - 1C (28) -----------------;
+;	This function logically sets the currently selected disk to a Read-Only	;
+; state. Any attempts to execute a Write Sequential or Write Random function;
+; to the selected disk will be intercepted by the BDOS, and the following	;
+; message will appear on the console:										;
+;	BDOS Err on X: R/O														;
+;	where X: is the selected disk.											;
+;																			;
+;	Once you have requested Read-Only status for the currently selected		;
+; logical disk, this status will persist even if you proceed to select		;
+; other logical disks. In fact, it will remain in force until the next warm ;
+; boot or Reset Disk System function call.									;
+;	Digital Research documentation refers to this function code as Disk Write;
+; Protect. The Read-Only description is used here because it corresponds	;
+; to the error message produced if your program attempts to write on		;
+; the disk.																	;
+;																			;
+;			Function Code	:	C = 01CH									;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	None										;
+;																			;
+;---------------------------- Write Protect Disk - 1C (28) -----------------;
+ ;;write protect current disk
+vWriteProtectDisk:
+	JP		SetDiskReadOnly
+;---------------------------- Get Read-Only Map - 1D (29) ------------------;
+;	This function returns a bit map in registers H and L showing which		;
+; logical disks in the system have been set to Read-Only status, either by	;
+; the Set Logical Disk to Read-Only function call (code 28, ICH), or by		;
+; the BDOS itself, because it detected that a diskette had been changed.	;
+;	The least significant bit of L corresponds to logical disk A, while the	;
+; most significant bit of H corresponds to disk P. The bit corresponding to ;
+; the specific logical disk is set to I if the disk has been set to			;
+; Read-Only status.															;
+;																			;
+;			Function Code	:	C = 01DH									;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	HL = Read-Only Vector						;
+;																			;
+;---------------------------- Get Read-Only Map - 1D (29) ------------------;
+vGetReadOnlyMap:
+	LD		HL,(readOnlyVector)
+	LD		(exitParameterWord),HL
+	RET
+;---------------------- Set File Attributes - 1E (30) ----------------------;
+;	This function sets the bits that describe attributes of a file in the	;
+; relevant directory entries for the specified file. Each file can be		;
+; assigned up to 11 file attributes. Of these 11, two have predefined		;
+; meanings, four others are available for you to use, and the remaining		;
+; five are reserved for future use by CP/M.									;
+;	Each attribute consists of a single bit. The most significant bit of	;
+; each byte of the file name and type is used to store the attributes.		;
+; The file attributes are known by a code consisting of the letter "f"		;
+; (for file name) or "t" (for file type), followed by the number of the		;
+; character position and a single quotation mark. For example, the Read-Only;
+; attribute is tl'.															;
+;	The significance of the attributes is as follows:						;
+;			fl' to f4' Available for you to use								;
+;			f5' to fS' Reserved for future CP/M use							;
+;			tl' Read-Only File attribute									;
+;			t2' System File attribute										;
+;			t3' Reserved for future CP/M use								;
+;																			;
+;	Attributes are set by presenting this function with an FCB in which the	;
+; unambiguous file name has been preset with the most significant bits		;
+; set appropriately. This function then searches the directory for a match	;
+; and changes the matched entries to contain the attributes which have been ;
+; set in the FCB.															;
+;	The BDOS will intercept any attempt to write on a file that has the		;
+; Read-Only attribute set. The DIR command in the CCP does not display any	;
+; file with System status.													;
+;																			;
+;	You can use the four attributes available to you to set up a file		;
+; security system, or perhaps to flag certain files that must be backed up	;
+; to other disks. The Search First and Search Next functions allow you to	;
+; view the complete file directory entry, so your programs can test the		;
+; attributes easily.														;
+;																			;
+;																			;
+;			Function Code	:	C	= 1EH									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A	= Directory Code						;
+;																			;
+;---------------------- Set File Attributes - 1E (30) ----------------------;
+vSetFileAttributes:
+	CALL	ReselectDisk				; Reselect if needed
+	LD		C,fcbExtIndex				; Size of search/match
+	CALL	SearchForDirectoryRecord	; Find a match
+SetAttributesLoop:
+	CALL	AtEndOfDirectory			; Any more dir entries ?
+	JP		Z,DirLocationToReturnLoc	; Return directory Index to caller
+; Directory entry found
+	LD		C,0							; Set starting position
+	LD		E,fcbExtIndex				; Set Length
+	CALL	CopyDir						; copy from FCB to dir entry
+	CALL	GetNextDirectoryRecord		; Go find the next directory record
+	JR		SetAttributesLoop			; Loop
+;------------------ Get Disk Parameter Block Address - 1F (31) -------------;
+;	This function returns the address of the disk parameter block (DPB) for	;
+; the last selected logical disk. The DPB describes the physical			;
+; characteristics of a specific logical disk-information mainly of interest ;
+; for system utility programs.												;
+;																			;
+;			Function Code	:	C = 1FH										;
+;			Entry Parameters:	None										;
+;			Exit Parameters :	HL = Address of Disk Parameter Block		;
+;																			;
+;------------------ Get Disk Parameter Block Address - 1F (31) -------------;
+vGetDiskParamBlock:							; func31 (31 - 1F)
+	LD		HL,(caDiskParamBlock)
+	LD		(exitParameterWord),HL
+	RET
+;------------------------- Read Random - 21 (33) ---------------------------;
+; This function reads a specific CP/M record (128 bytes) from a random file ;
+; that is, a file in which records can be accessed directly. It assumes that;
+; you have already opened the file, set the DMA address using the BDOS		;
+; Set DMA function, and set the specific record to be read into the random	;
+; record number in the FCB. This function computes the extent of the		;
+; specified record number and attempts to open it and read the correct CP/M ;
+; record into the DMA address.												;
+;	The random record number in the FCB is three bytes long (at relative	;
+; bytes 33, 34, and 35). Byte 33 is the least significant byte, 34 is the	;
+; middle byte, and 35 the most significant. CP/M uses only the most			;
+; significant byte (35) for computing the overall file size (function 35).	;
+; You must set this byte to 0 when setting up the FCB. Bytes 33 and 34		;
+; are used together for the Read Random, so you can access from record		;
+; 0 to 65535 (a maximum file size of 8,388,480 bytes).						;
+;	This function returns with A set to 0 to indicate that the operation has;
+; been completed successfully, or A set to a nonzero value if an error has	;
+; occurred. The error codes are as follows:									;
+;		A = 01 (attempt to read unwritten record)							;
+;		A = 03 (CP/M could not close current extent)						;
+;		A = 04 (attempt to read unwritten extent)							;
+;		A = 06 (attempt to read beyond end of disk)							;
+;																			;
+;	Unlike the Read Sequential BOOS function (code 20, l4H), which updates	;
+; the current (sequential) record number in the FCB, the Read Random		;
+; function leaves the record number unchanged, so that a subsequent Write	;
+; Random will replace the record just read.									;
+;	You can follow a Read Random with a Write Sequential (code 21, l5H).	;
+; This will rewrite the record just read, but will then update the			;
+; sequential record number. Or you may choose to use a Read Sequential after;
+; the Read Random. In this case, the same record will be reread and the		;
+; sequential record number will be incremented. In short, the file can be	;
+; sequentially read or written once the Read Random has been used to		;
+; position to the required place in the file.								;
+;																			;
+; To use the Read Random function, you must first open the base extent of	;
+; the file, that is, extent O. Even though there may be no actual data		;
+; records in this extent, opening permits the file to be processed			;
+; correctly.																;
+;	One problem that is not immediately obvious with random files is that	;
+; they can easily be created with gaps in the file. If you were to create	;
+; the file with record number 0 and record number 5000, there would be no	;
+; intervening file extents. Should you attempt to read or copy the file		;
+; sequentially, even using CP/M's file copy utility, only the first extent	;
+; (and in this case, record 0) would get copied. A Read Sequential function ;
+; would return an "end of file" error after reading record O. You must		;
+; therefore be conscious of the type of the file that you try and read	.	;
+;																			;
+;																			;
+;																			;
+;			Function Code	:	C	= 21H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A = 01 (attempt to read unwritten record)	;
+;								A = 03 (CP/M could not close current extent);
+;								A = 04 (attempt to read unwritten extent)	;
+;								A = 06 (attempt to read beyond end of disk) ;
+;																			;
+;------------------------- Read Random - 21 (33) ---------------------------;
+ vReadRandom:
+	CALL	ReselectDisk				; Reselect if needed
+	LD		C,TRUE						; Identify as a Read
+	CALL	RandomSeek					; Set up correct Dir entry etc.
+	CALL	Z,DiskRead					; Go Read
+	RET
+;------------------------- Write Random - 22 (34) --------------------------;
+; This function writes a specific CP/M record (128 bytes) into a random		;
+; file. It is initiated in much the same way as the companion function,		;
+; Read Random (code 33,21H). It assumes that you have already opened the	;
+; file, set the DMAaddress to the address in memory containing the record to;
+; be written to disk, and set the random record number in the FCB to the	;
+; specified record being written. This function also computes the extent in ;
+; which the specified record number lies and opens the extent (creating it	;
+; if it does not already exist). The error codes returned in A by this call ;
+; are the same as those for Read Random, with the addition of error			;
+; code 05, which indicates a full directory.								;
+;	Like the Read Random (but unlike the Write Sequential), this function	;
+; does not update the logical extent and sequential (current) record number ;
+; in the FCB. Therefore, any subsequent sequential operation will access	;
+; the record just written by the Read Random call, but these functions will ;
+; update the sequential record number. The Write Random can therefore be	;
+; used to position to the required place in the file, which can then be		;
+; accessed sequentially.													;
+;																			;
+;	In order to use the Write Random, you must first open the base extent	;
+; (extent 0) of the file. Even though there may be no data records in this	;
+; extent, opening permits the file to be processed correctly.				;
+;	As explained in the notes for the Read Random function, you can easily	;
+; create a random file with gaps in it. If you were to create a file with	;
+; record number 0 and record number 5000, there would be no intervening		;
+; file extents.																;
+;																			;
+;			Function Code	:	C	= 24H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A = 01 (attempt to read unwritten record)	;
+;								A = 03 (CP/M could not close current extent);
+;								A = 04 (attempt to read unwritten extent)	;
+;								A = 05 (CP/M cannot create new extent)		;
+;								A = 06 (attempt to read beyond end of disk) ;
+;																			;
+;------------------------- Write Random - 22 (34) --------------------------;
+ vWriteRandom:
+	CALL	ReselectDisk				; Reselect if needed
+	LD		C,FALSE						; Identify as a Write
+	CALL	RandomSeek
+	CALL	Z,DiskWrite					; Go Write
+	RET
+;------------------------- Get File Size - 23 (35) -------------------------;
+;	This function returns the virtual size of the specified file. It does so;
+; by setting the random record number (bytes 33-35) in the specified FCB to ;
+; the maximum 128-byte record number in the file. The virtual file size is	;
+; calculated from the record address of the record following the end of the ;
+; file. Bytes 33 and 34 form a 16-bit value that contains the record number,;
+; with overflow indicated in byte 35. If byte 35 is 01, this means that the ;
+; file has the maximum record count of 65,536.								;
+;	If the function cannot find the file specified by the FCB, it returns	;
+; with the random record field set to O.									;
+;	You can use this function when you want to add data to the end of an	;
+; existing file. By calling this function first, the random record bytes	;
+; will be set to the end of file. Subsequent Write Random calls will write	;
+; out records to this preset address.										;
+;																			;
+;	Do not confuse the virtual file size with the actual file size. In a	;
+; random file, if you write just a single CP/M record to record number		;
+; 1000 and then call this function, it will return with the random record	;
+; number field set in the FCB to 1000, even though only a single record		;
+; exists in the file. For sequential files, this function returns the		;
+; number of records in the file. In this case, the virtual and actual file	;
+; sizes coincide.															;
+;																			;
+;																			;
+;			Function Code	:	C	= 23H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	Random record field set in FCB				;
+;																			;
+;------------------------- Get File Size - 23 (35) -------------------------;
+vComputeFileSize:
+	CALL	ReselectDisk				; Reselect if needed
+	LD		C,fcbExtIndex				; Set search/match length
+	CALL	SearchForDirectoryRecord	; Set directoryIndex
+; zero the receiving FCB Random Record field
+	LD		HL,(paramDE)				; Point at FCB
+	LD		DE,recordRandom				; Random Record index
+	ADD		HL,DE						; Point at Random Record
+	PUSH	HL							; Random Record LSB pointer
+	LD		(HL),D						; Set Random Record LSB = 0
+	INC		HL							; Random Record MSB pointer
+	LD		(HL),D						; Set Random Record MSB = 0
+	INC		HL							; Random Record overflow pointer
+	LD		(HL),D						; Set Random Record overflow = 0
+GetFileSize1:
+	CALL	AtEndOfDirectory			; Any more dir entries ?
+	JR		Z,GetFileSizeExit			;	exit if no
+	CALL	GetCurrentDirectoryRecord	; HL points at Directory entry
+	LD		DE,fcbRCIndex				; FCB Record Count index
+	CALL	GetRandomRecordPosition
+; ???????
+	POP		HL
+	PUSH	HL							; recall, replace .fcb(Random record Field)
+	LD		E,A							; save cy
+	LD		A,C
+	SUB		M
+	INC		HL							; ls byte
+	LD		A,B
+	SBC		A,(HL)
+	INC		HL							; middle byte
+	LD		A,E
+	SBC		A,(HL)						; carry if .fcb(random record field) > directory
+	JR		C,GetFileSize2				; for another try
+										; fcb is less or equal, fill from directory
+	LD		(HL),E
+	DEC		HL
+	LD		(HL),B
+	DEC		HL
+	LD		(HL),C
+GetFileSize2:							; getnextsize:
+	CALL	GetNextDirectoryRecord
+	JR		GetFileSize1
+GetFileSizeExit:						; setsize:
+	POP		HL							; discard .fcb(random record field)
+	RET
+;------------------ Set Random Record Number - 24 (36) ---------------------;
+;	This function sets the random record number in the FCB to the correct	;
+; value for the last record read or written sequentially to the file.		;
+;																			;
+;	This function provides you with a convenient way to build an index file	;
+; so that you can randomly access a sequential file. Open the sequential	;
+; file, and as you read each record, extract the appropriate key field from ;
+; the data record. Make the BDOS Set Random Record request and create a new ;
+; data record with just the key field and the random record number. Write	;
+; the new data record out to the index file.								;
+;	Once you have done this for each record in the file, your index file	;
+; provides a convenient method, given a search key value, of finding the	;
+; appropriate CP/M record in which the data lies.							;
+;	You can also use this function as a means of finding out where you are	;
+; currently positioned in a sequential file-either to relate a CP/M record	;
+; number to the position, or simply as a place-marker to allow a			;
+; repositioning to the same place later.									;
+;																			;
+;																			;
+;			Function Code	:	C	= 24H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	Random record field set in FCB				;
+;																			;
+;------------------ Set Random Record Number - 24 (36) ---------------------;
+ vSetRandomRecord:
+	LD		HL,(paramDE)				; FCB
+	LD		DE,recordSeq				; Sequential record index
+	CALL	GetRandomRecordPosition
+; A = Overflow, B = randomRecord MSB, C = randomRecord LSB
+	LD		HL,recordRandom
+	ADD		HL,DE						; HL = .FCB(RANDOM_REC_FIELD)
+	LD		(HL),C
+	INC		HL
+	LD		(HL),B
+	INC		HL
+	LD		(HL),A						; to RANDOM_REC_FIELD
+	RET
+;------------------------ Reset Logical Disk Drive - 25 (37) ---------------;
+;	This function resets individual disk drives. It is a more precise		;
+; version of the Reset Disk System function (code 13,ODH), in that you		;
+; can set specific logical; disks rather than all of them.					;
+;	The bit map in DE shows which disks are to be reset. The least			;
+; significant bit of E represents disk A, and the most significant bit of	;
+; D, disk P. The bits set to 1 indicate the disks to be reset.				;
+;	Note that this function returns a zero value in A in order to maintain	;
+; compatibility with MP/ M.													;
+;													;						;
+;	Use this function when only specific diskettes need to be changed.		;
+; Changing a diskette without requesting CP/M to log it in will cause the	;
+; BDOS to assume that an error has occurred and to set the new diskette to	;
+; Read-Only status as a protective measure									;
+;																			;
+;			Function Code	:	C = 25H										;
+;			Entry Parameters:	DE = Logical Drive Bit Vector				;
+;			Exit Parameters :	A = 00H										;
+;																			;
+;------------------------ Reset Logical Disk Drive - 25 (37) ---------------;
+;	**************	Not Yet Implemented	**************
+ vResetDrive:
+	LD		A,-1						; Error return
+	RET
+;------------------------------ Access Drive - 26 (38) ---------------------;
+;								NOT SUPPORTED								;
+;------------------------------ Access Drive - 26 (38) ---------------------;
+;------------------------------ Free	Drive - 27 (39) --------------------;
+;								NOT SUPPORTED								;
+;------------------------------ Free	Drive - 27 (39) --------------------;
+;---------------- Write Random with Zero Fill - 28 (40) --------------------;
+;	This function is an extension to the Write Random function described	;
+; previously. In addition to performing the Write Random, it will also fill ;
+; each new allocation block with OOH's. Digital Research added this function;
+; to assist Microsoft with the production of its COBOL compiler-it makes the;
+; logic of the file handling code easier. It also is an economical way to	;
+; completely fill a random file with OOH's. You need only write one record	;
+; per allocation block, the BDOS will clear the rest of the block for you.	;
+;																			;
+;																			;
+;			Function Code	:	C	= 24H									;
+;			Entry Parameters:	DE = Address of File Control Block			;
+;			Exit Parameters :	A = Return Code								;
+;																			;
+;---------------- Write Random with Zero Fill - 28 (40) --------------------;
+vWriteRandom0Fill:
+ ; Not Yet Implemented	**************
+	RET
+;--------------------------- Select	Drive ----------------------------------;
+; Establish the disk found in (paramE) as the current disk drive			;
+SelectCurrent:																;
+	LD		A,(paramE)					; Get Disk (00H = A,01H = B ..)		;
+	LD		HL,currentDisk				; Get the current disk				;
+	CP		M							; Are the the same ?				;
+	RET		Z							; Exit if yes, nothing to do		;
+	LD		(HL),A						;	else update curretDisk and		;
+	JR		Select						;	select it						;
+;--------------------------- Select	Drive ----------------------------------;
+;--------------------------- Select Login Drive ----------------------------;
+ ; select Login Drive														;
+Select:																		;
+ 	CALL	SelectDisk					; Select the Disk					;
+	CALL	Z,Error_Select													;
+	LD		HL,currentDisk													;
+	LD		B,(HL)						; Get Current Disk					;
+	LD		HL,(loggedDisks)			; Load Logged Disk MAP				;
+	CALL	IsBitSet														;
+	RET		NZ							; Exit if already logged in			;
+;																			;
+	LD		HL,currentDisk													;
+	LD		B,(HL)						; Get Current Disk					;
+	LD		HL,(loggedDisks)			; else log in a different disk		;
+	CALL	SetVectorBit													;
+	LD		(loggedDisks),HL			; Update the Vector					;
+																			;
+	JP		InitDisk														;
+;--------------------------- Select Login Drive ----------------------------;
+;--------------------------- Select Disk -----------------------------------;
+; select the disk drive given by currentDisk, and fill the base addresses	;
+; caTrack - caAllocVector, then fill the values of the disk parameter block ;
+SelectDisk:																	;
+	LD		A,(currentDisk)				; Get current disk (0=A,1=B...)		;
+	LD		C,A							; Prepare for BIOS Call				;
+	CALL	bcSeldsk					; Select the disk					;
+	LD		A,H							; Return Pointer to					;
+	OR		L							;	Disk Parameter Header			;
+	RET		Z							; exit if error, with HL = 0000		;
+																			;
+	LD		E,(HL)															;
+	INC		HL																;
+	LD		D,(HL)						; Skew Table in DE					;
+	INC		HL							; HL = DPH + 2, Rel Pos for File	;
+	LD		(caSkewTable),DE			; Move to Current Skew Table		;
+																			;
+	LD		(caDirMaxValue),HL			; Move to Current Dir max			;
+	INC		HL																;
+	INC		HL							; HL = Last Track #					;
+	LD		(caTrack),HL				; Move to Current Track #			;
+	INC		HL																;
+	INC		HL							; HL = Last Sector #				;
+	LD		(caSector),HL				; Move to Current Sector #			;
+	INC		HL																;
+	INC		HL																;
+	LD		DE,caDirectoryDMA												;
+	LD		BC,caListSize													;
+	LDIR																	;
+																			;
+; finish filling in address list											;
+	LD		HL,(caDiskParamBlock)		; Point Disk Parameter Block		;
+	LD		DE,dpbStart					; Point at BIOS DPB					;
+	LD		BC,dpbSize														;
+	LDIR								; Move DPB to current				;
+																			;
+; Determine if Byte or Word Allocation Table								;
+	LD		HL,(dpbDSM)					; Get max entry number				;
+	LD		A,H							; If	its 00 then < 255			;
+	LD		HL,byteAllocationFlag		; Point at the	flag				;
+	LD		(HL),TRUE					; Assume its less than 255			;
+	OR		A							;	is the assumption confirmed ?	;
+	JR		Z,SelectDisk1				;	skip if yes						;
+	LD		(HL),FALSE					; Fix assumption,set flag to false	;
+																			;
+; Set Sign, reset Carry and Zero to indicate success						;
+ SelectDisk1:																;
+	LD	A,TRUE																;
+	OR	A																	;
+	RET																		;
+;--------------------------- Select Disk -----------------------------------;
+;--------------------------- Initialize Disk -------------------------------;
+InitDisk:																	;
+	LD		HL,(dpbDSM)					; Maximum allocation value			;
+	CALL	DivideHLby8					; Length of Map						;
+	PUSH	HL							; Save Length						;
+	PUSH	HL							; Save for end of MAP				;
+	POP		BC							; BC = dpbDSM/8						;
+; Clear the Allocation Vector												;
+	LD		HL,(caAllocVector)			; Allocation vector Start			;
+	LD		(HL),0						; Clear location					;
+	LD		DE,(caAllocVector)												;
+	INC		DE							; Allocation vector Start + 1		;
+	LDIR								; Cascade 00 thru Map				;
+; Force bits at End of Map													;
+	EX		DE,HL						; Put last Map byte into DE			;
+	POP		HL																;
+	INC		HL																;
+	CALL	MultiplyHLby8				; Blocks if all bits used			;
+	LD		BC,(dpbDSM)					; Actual block max					;
+	INC		BC							; Now has size of the Map			;
+	XOR		A							; Clear CY							;
+	SBC		HL,BC						; Extra unused bits					;
+	CP		L							;	are there any					;
+	JR		Z,Mark4Directory												;
+	LD		B,L							; Number of bits to set				;
+	EX		DE,HL						; Put last Map byte into HL			;
+SetBitLoop:																	;
+	SCF																		;
+	RL		(HL)						; Set LSB							;
+	DJNZ	SetBitLoop					; Loop thru the bits				;
+																			;
+Mark4Directory:																;
+; Mark the reserved space for the directory									;
+	LD		HL,(dpbDABM)				; Directory block reserved bits		;
+	EX		DE,HL															;
+	LD		HL,(caAllocVector)			; HL Start of Allocation Vector		;
+	LD		(HL),E															;
+	INC		HL																;
+	LD		(HL),D						; Put reserved blocks in Vector		;
+; end of Map																;
+; Home disk, and set current track and sector to 00							;
+	CALL	Home															;
+	LD		HL,(caDirMaxValue)												;
+	LD		(HL),3															;
+	INC		HL																;
+	LD		(HL),0						; Current Max Dir Value = 0003		;
+	CALL	SetEndDirectory				; dirEntryIndex = EOD (-1)			;
+																			;
+InitDisk1:																	;
+; Process the directory														;
+	LD		C,TRUE						; Set flag for setting CheckSum		;
+	CALL	ReadDirectory				; Get the directory Record			;
+	CALL	AtEndOfDirectory			; Are we Done ?						;
+	RET		Z							;	Exit if Yes						;
+; Not end of directory, valid entry?										;
+	CALL	GetCurrentDirectoryRecord	; Calculate location of the element ;
+	LD		A,emptyDir														;
+	CP		M							; Is it an Empty Dir Entry			;
+	JR		Z,InitDisk1					;	Loop back if yes				;
+; Not emptyDir, user code the same?											;
+	LD		A,(currentUserNumber)											;
+	CP		M																;
+	JR		NZ,InitDisk2				; Skip if this entry not the users	;
+; Same user, check for '$' submit											;
+	INC		HL																;
+	LD		A,(HL)															;
+	SUB		DOLLAR						; Is first Char a $					;
+	JR		NZ,InitDisk2													;
+; dollar file found, mark in exitParameterByte								;
+	DEC		A							; Set A to FFH						;
+	LD		(exitParameterByte),A		; Return it the exit parameter		;
+ InitDisk2:																	;
+; now scan the disk map for allocated blocks								;
+	LD		C,TRUE						; set to allocated					;
+	CALL	ScanDiskMap														;
+	CALL	SetDirectoryEntry			; Mark directory entry				;
+	JR		InitDisk1					; Loop for another entry			;
+;--------------------------- Initialize Disk -------------------------------;
+;----------------------------- Open File -----------------------------------;
+;search for the directory entry matching FCB at paramDE						;
+ OpenFile:																	;
+	LD		C,nameLength													;
+	CALL	SearchForDirectoryRecord										;
+	CALL	AtEndOfDirectory			; Have we gone thru all the dir		;
+	RET		Z							; Exit exitParameterByte=255 if yes	;
+																			;
+CopyDirRecordToFCB:															;
+	CALL	GetExtentAddress			; HL points to FCB's EXT			;
+	LD		A,(HL)						; Get the EXT						;
+	PUSH	AF							; Save the FCB's EXT value			;
+	PUSH	HL							;	also save FCB's pointer			;
+	CALL	GetCurrentDirectoryRecord	; Get pointer to Dir record in HL	;
+	PUSH	HL							; Save Directory Record address		;
+																			;
+	LD		DE,(paramDE)													;
+	LD		BC,fcbLength													;
+	LDIR								; Move dir record to FCB			;
+																			;
+ ; note that entire fcb is copied, including indicators						;
+	CALL	SetFileWriteFlag			; Set clean file flag				;
+	POP		DE							; Get Directory Record address		;
+	LD		HL,fcbExtIndex				; Extent Index						;
+	ADD		HL,DE						; Directory's EXT address			;
+	LD		C,(HL)						; Dir's EXT is in B					;
+	LD		HL,fcbRCIndex				; Get Record Count Index			;
+	ADD		HL,DE						; Directory's RC address			;
+	LD		B,(HL)						; B holds Dir's	record count		;
+	POP		HL							; Get FCB's Extent Address			;
+	POP		AF							; Get FCB's Extent Value			;
+	LD		(HL),A						; Restore Extent Value				;
+; if user ext < dir ext then user := 128 records							;
+; if user ext = dir ext then user := dir records							;
+; if user ext > dir ext then user := 0 records								;
+	LD		A,C							; Get the Dir's EXT					;
+	CP		M							; Does it match the FCB'd			;
+	LD		A,B							; Get the Dir's	record count		;
+	JR		Z,OpenSetRecordCount		; If same EXT value, use it.		;
+	LD		A,0							;	else prepare for RC = 0			;
+	JR		C,OpenSetRecordCount		; If FCB EXT > Dir EXTr				;
+	LD		A,RecordsPerExtent			;	else max record count out		;
+ OpenSetRecordCount:														;
+	LD		HL,(paramDE)				; Get FCB's address					;
+	LD		DE,fcbRCIndex				; Get record count index			;
+	ADD		HL,DE						; FCB's record count				;
+	LD		(HL),A						; Set the value						;
+	RET																		;
+;----------------------------- Open File -----------------------------------;
+;---------------------------- Close Directory Entry ------------------------;
+ CloseDirEntry:																;
+	XOR		A																;
+	LD		(exitParameterByte),A		; Clear exit parameter				;
+	CALL	IsDiskWriteProtected		; Return Z set if writable			;
+	RET		NZ							; Skip close if r/o disk			;
+; check file write flag - 0 indicates written								;
+																			;
+	PUSH	IX																;
+	LD		IX,(paramDE)				; FCB address						;
+	BIT		7,(IX + fcbS2Index)			; Has WFF changed ?					;
+	POP		IX																;
+	RET		NZ							; Skip close if clean file			;
+																			;
+;	CALL	GetWriteFileFlagValue		; Get file's WriteFileFlag			;
+;	BIT		7,A							;	Has it changed ?				;
+;	RET		NZ							; Skip close if clean file			;
+																			;
+	LD		C,nameLength													;
+	CALL	SearchForDirectoryRecord	; Find the file's directory record	;
+	CALL	AtEndOfDirectory			; If EOD then there is no more		;
+	RET		Z							;	exit if at EOD					;
+																			;
+; merge the FCB's Disk Map with the Directory record Disk Map				;
+	CALL	GetCurrentDirectoryRecord	; HL points to directory record		;
+	LD		BC,fcbDiskMapIndex			; Disk Alloc block map index		;
+	ADD		HL,BC															;
+	EX		DE,HL						; DE = Directory Entry Map pointer	;
+	LD		HL,(paramDE)													;
+	ADD		HL,BC						; HL = FCB Map Pointer				;
+	LD		C,(fcbLength-fcbDiskMapIndex); Size Allocation Map				;
+																			;
+MergeAllocationMaps:														;
+	LD		A,(byteAllocationFlag)											;
+	OR		A																;
+	JR		Z,MergeWordMaps				; Process Word size Block Numbers	;
+; process byte size Map														;
+	LD		A,(HL)						; FCB Block number					;
+	OR		A							; Is it 0 ?							;
+	LD		A,(DE)						;	anticipate yes					;
+	JR		NZ,MergeFCBisNot0			;	Skip if no						;
+	LD		(HL),A						; Move Dir Entry Value to FCB		;
+MergeFCBisNot0:																;
+	OR		A							; Is Dir Entry Value = 0 ?			;
+	JR		NZ,MergeDirEntryNot0		; Skip if no						;
+	LD		A,(HL)						;	else move FCB map value			;
+	LD		(DE),A						;	to Dir Entry Value 				;
+ MergeDirEntryNot0:															;
+	CP		M							; Do FCB and Dir match values		;
+	JR		NZ,CloseDirEntryError		;	If not then report error		;
+	JR		MergeMapLoop				; Go see if there is more			;
+																			;
+MergeWordMaps:																;
+	CALL	Merge						; If FCB map value = 0 move Dir's	;
+	EX		DE,HL															;
+	CALL	Merge						; IF Dir Map value = 0 move FCB's	;
+	EX		DE,HL						; HL = FCB Map pointer, DE = Dir's	;
+	LD		A,(DE)						; Does the FCB Map value			;
+	CP		M							;	= Dir record Map pointer ?		;
+	JR		NZ,CloseDirEntryError		;	If not then report error		;
+	INC		DE																;
+	INC		HL							; move on to the MSB				;
+	LD		A,(DE)															;
+	CP		M							; do the check for equality			;
+	JR		NZ,CloseDirEntryError		;	If not then report error		;
+	DEC		C							; Extra count for 2 bytes			;
+MergeMapLoop:																;
+	INC		DE							; Advance to the next positions		;
+	INC		HL							; in The Maps						;
+	DEC		C							; Are we done ?						;
+	JR		NZ,MergeAllocationMaps		;	No, do it again					;
+																			;
+; Check the EXT																	;
+	LD		BC,-(fcbLength-fcbExtIndex)	;Adjust to get Ext pointer			;
+	ADD		HL,BC															;
+	EX		DE,HL						; HL = Directory Entry EXT pointer	;
+	ADD		HL,BC						; DE = FCB EXT Pointer				;
+	LD		A,(DE)						; FCB's extent number				;
+	CP		M							; Is it < Dir Record EXT ?			;
+	JR		C,CloseDirEntryEnd			;	we are done if yes				;
+	LD		(HL),A						; Else replace the Dir Record EXT	;
+; Update directory record count field										;
+	LD		BC,fcbRCIndex-fcbExtIndex	; Need to adjust to the record Count;
+	ADD		HL,BC															;
+	EX		DE,HL						; DE = = Directory Entry EXT pointer;
+	ADD		HL,BC						; HL = FCB EXT Pointer				;
+	LD		A,(HL)						; Copy the FCB RC to				;
+	LD		(DE),A						;	the Directory Record RC			;
+																			;
+CloseDirEntryEnd:															;
+	LD		A,TRUE															;
+	LD		(fcbCopiedFlag),A			; Set copied flag as true			;
+;/	CALL	SeekCopy					; ok to "Write Dir" here			;
+	CALL	SeekDir						; Set up parameters for a Disk I/O	;
+	JP		WriteDir					; Write the directory element		;
+	RET																		;
+																			;
+ CloseDirEntryError:														;
+	LD		HL,exitParameterByte											;
+	DEC		M							; Set Exit value to 0FFH			;
+	RET																		;
+;---------------------------- Close Directory Entry ------------------------;
+;----------------------------------- Make new File -------------------------;
+;create a new file by creating a directory entry then opening the file		;
+MakeNewFile:																;
+	CALL	CheckWrite					; Terminate with error if Disk R/O	;
+	LD		HL,(paramDE)				; Get the FCB						;
+	PUSH	HL							; FCB								;
+	LD		HL,emptyFCB														;
+	LD		(paramDE),HL				; Find the first empty dir record	;
+	LD		C,1																;
+	CALL	SearchForDirectoryRecord	; 0F5H in first position			;
+	CALL	AtEndOfDirectory			; Check if at end of directory		;
+	POP		HL							; Recall the FCB pointer			;
+	LD		(paramDE),HL				;	in case we return here			;
+	RET		Z							; Exit with No Dir space error		;
+; fill Allocation Map with Zeros											;
+	LD		DE,nameLength													;
+	ADD		HL,DE						; Start of fill						;
+	LD		(HL),00						; Prime the values					;
+	PUSH	HL																;
+	POP		DE							; Copy to DE						;
+	INC		DE							; adjust the to pointer				;
+	LD		BC,fcbLength-nameLength-1	; number of bytes to fill			;
+	LDIR																	;
+																			;
+	LD		HL,(paramDE)				; get FCB							;
+	LD		DE,fcbS1Index				; Get the S1 index					;
+	ADD		HL,DE						; Point to S1						;
+	LD		(HL),0						; Set to 0							;
+	CALL	SetDirectoryEntry			; Update directory entry			;
+	CALL	CopyFCB						; Update dir entry to Disk			;
+; and set the file write flag to "1"										;
+	JP		SetFileWriteFlag			; Set the clean entry flag			;
+;----------------------------------- Make new File -------------------------;
+;=========================== Disk Utilities ================================;
+;--------------------------- Home The Current Disk -------------------------;
+;move to home position, then offset to start of dir							;
+Home:																		;
+	CALL	bcHome						; Sets Track to 0, and checks		;
+										; if Buffer needs to be written		;
+	LD		HL,dpbOFF					; Number of tracks before directory ;
+	LD		C,(HL)															;
+	INC		HL																;
+	LD		B,(HL)															;
+	CALL	bcSettrk					; Point at 1st directory position	;
+																			;
+; Set Current Track and Sector to 00										;
+	XOR		A							; set ACC to 00						;
+	LD		HL,(caTrack)													;
+	LD		(HL),A															;
+	INC		HL																;
+	LD		(HL),A															;
+	LD		HL,(caSector)													;
+	LD		(HL),A															;
+	INC		HL																;
+	LD		(HL),A															;
+	RET																		;
+																			;
+;--------------------------- Home The Current Disk -------------------------;
+;--------------------------- Set DMAs --------------------------------------;
+SetDataDMA:																	;
+	LD		HL,initDAMAddress												;
+	JR		SetDMA						; Skip to complete the call			;
+																			;
+SetDirDMA:																	;
+	LD		HL,caDirectoryDMA			; Load current directory Buffer		;
+																			;
+SetDMA:																		;
+	LD		C,(HL)															;
+	INC		HL																;
+	LD		B,(HL)							; parameter ready				;
+	JP		bcSetdma						; call bios to set				;
+;--------------------------- Set DMAs --------------------------------------;
+;--------------------------- Read Buffer -----------------------------------;
+;reads into current DMA, using current Disk,Track and Sector				;
+ReadBuffer:																	;
+	CALL	bcRead						; Do the read at the BIOS level		;
+	OR		A							; Check status						;
+	JP		NZ,Error_BadSector				; Report if Status not OK		;
+	RET																		;
+;--------------------------- Read Buffer -----------------------------------;
+;--------------------------- Set Current Disk Read Only --------------------;
+;set current disk to read only												;
+ SetDiskReadOnly:															;
+	LD		HL,(readOnlyVector)			; Get the Vector					;
+																			;
+	LD		A,(currentDisk)				; Get the current disk				;
+	LD		B,A							; Move into B						;
+	CALL	SetVectorBit				; Set the bit						;
+	LD		(readOnlyVector),HL			; Update the Vector					;
+																			;
+	LD		HL,(dpbDRM)					; Directory Max Value				;
+	EX		DE,HL															;
+	LD		HL,(caDirMaxValue)			; HL = .Directory max value			;
+	LD		(HL),E															;
+	INC		HL																;
+	LD		(HL),D															;
+	RET																		;
+;--------------------------- Set disk Read Only ----------------------------;
+;--------------------------- Is Disk Write Protected -----------------------;
+;Returns:	Z flag	= Set if not Write Protected	(Z)						;
+;					= reset if Write Protected		(NZ)					;
+IsDiskWriteProtected:														;
+	LD		HL,(readOnlyVector)			; Get Read Only Vector				;
+	LD		A,(currentDisk)				; Get current disk					;
+	LD		B,A																;
+	CALL	IsBitSet					; Check the bit						;
+	RET									; NZ if Disk is RO					;
+;--------------------------- Is Disk Write Protected -----------------------;
+;------------------------- Reselect Disk if Necessary ----------------------;
+ ;check current fcb to see if reselection necessary							;
+ ReselectDisk:																;
+	LD		A,TRUE															;
+	LD		(fResel),A					; Mark as possible reselect			;
+	LD		HL,(paramDE)				; Point at current FCB				;
+	LD		A,(HL)						; Load disk drive (0 = current)		;
+	AND		01FH						; Mask out user Number ??			;
+	DEC		A							; Normalized to 0..29, or 255		;
+	LD		(paramE),A					; Save drive code					;
+	CP		30																;
+	JR		NC,NoSelect					; Skip drive >= 30					;
+																			;
+	LD		A,(currentDisk)				; Determine the current drive		;
+	LD		(entryDisk),A				; Save it							;
+	LD		A,(HL)															;
+	LD		(fcbDisk),A					; Get calling disk					;
+	AND		11100000B														;
+	LD		(HL),A						; Preserve User Number				;
+	CALL	SelectCurrent				; Select the new disk				;
+																			;
+ NoSelect:																	;
+	LD		A,(currentUserNumber)		; Get user code 0...31				;
+	LD		HL,(paramDE)				; Point at disk number				;
+	OR		M							; Combine							;
+	LD		(HL),A						; FCB[0] = user number & disk		;
+	RET																		;
+;------------------------- Reselect Disk if Necessary ----------------------;
+;=========================== Disk Utilities ================================;
+;=========================== File Utilities ================================;
+;--------------------------- Set Record Variables --------------------------;
+;set variables from currently FCB - Current Record, RC, EXM					;
+SetRecordVars:																;
+	CALL	GetFcbRecordDetails			; DE = .RecordCount					;
+										;	and HL => .CurrentRecord		;
+	LD		A,(HL)															;
+	LD		(currentFileRecord),A		; Save current record				;
+	EX		DE,HL															;
+	LD		A,(HL)															;
+	LD		(fcbRecordCount),A			; Save the FCBs RC					;
+	CALL	GetExtentAddress			; HL=.FCB(fcbExtIndex)				;
+	LD		A,(dpbEXM)					; Extent mask						;
+	AND		M							; Remove unwanted bits				;
+	LD		(extentValue),A				; Store the value					;
+	RET																		;
+;--------------------------- Set Record Variables --------------------------;
+;----------------------Get File Record Count and Current Record-------------;
+; returns with DE pointing at RC from FCB									;
+;		with HL pointing at Current Record									;
+ GetFcbRecordDetails:														;
+	LD		HL,(paramDE)				; Get FCB start						;
+	LD		DE,fcbRCIndex				; Offset to Record Count			;
+	ADD		HL,DE															;
+	EX		DE,HL						; DE Points to Record Count			;
+	LD		HL,recordSeq-fcbRCIndex											;
+	ADD		HL,DE						; HL Points to Current Record		;
+	RET																		;
+;----------------------Get File Record Count and Current Record-------------;
+;----------------------Get FileExtent---------------------------------------;
+ ;get current extent field address to (HL)									;
+ GetExtentAddress:															;
+	LD		HL,(paramDE)				; Get FCB							;
+	LD		DE,fcbExtIndex				; Get EXT offset					;
+	ADD		HL,DE						; HL=.fcb(fcbExtIndex)				;
+	RET																		;
+;----------------------Get FileExtent---------------------------------------;
+;--------------------- Set/Reset Disk Map Allocation Bit -------------------;
+; At Entry:	BC Contains to the Block to be modified							;
+;			E	= TRUE if bit is to be set									;
+;			E	<> TRUE if bit is to be reset								;
+; At Exit:	The target bit in the target Octet will be set/reset			;
+ SetResetMapBit:															;
+																			;
+	LD		HL,0000H					; Move the block number from BC		;
+	ADD		HL,BC						;	to HL							;
+	LD		C,E							; Move the flag to E				;
+																			;
+	LD		A,L							; LSB of the Block Number			;
+	AND		07H							; Calculate Mod(Block,8)			;
+	PUSH	AF							; Save the OctetBit					;
+	LD		B,3																;
+	CALL	ShiftRightHLbyB				; Calculate Block / 8				;
+	LD		DE,(caAllocVector)			; Start Of Map						;
+	ADD		HL,DE						; Address of targeted Octet			;
+	POP		AF																;
+	LD		B,A							; Get the bit						;
+																			;
+	INC		B							; Adjust for looping				;
+	PUSH	BC							; Will need this later				;
+Left:																		;
+	RL		(HL)						; Rotate the Octet					;
+	DJNZ	Left						;	to move target bit to bit 0		;
+	POP		BC							; Restore loop limit and			;
+	SCF									;	set/reset flag					;
+	INC		C							; was C = TRUE						;
+	JR		Z,Right						; Skip if Set						;
+	CCF									; Set for Reset						;
+Right:																		;
+	RR		(HL)						; Move the Octet back				;
+	DJNZ	Right						;	to its original alignment		;
+	RET																		;
+;--------------------- Set/Reset Disk Map Allocation Bit -------------------;
+;--------------------- Initialize Extent Number MSB ------------------------;
+ ;clear the Extent number field for user open/make (S2)						;
+InitializeExtentNumberMSB:													;
+	PUSH	IX																;
+	LD		IX,(paramDE)				; FCB address						;
+	LD		(IX + fcbS2Index),0			; Clear value						;
+	POP		IX																;
+	RET																		;
+																			;
+;--------------------- Initialize Extent Number MSB ------------------------;
+;--------------------------- Set File Write Flag----------------------------;
+;Set file write flag in FCB in (paramDE)									;
+; Used to indicate the FCB is clean. No need to write on close				;
+SetFileWriteFlag:															;
+	PUSH	IX																;
+	LD		IX,(paramDE)				; FCB address						;
+	SET		7,(IX + fcbS2Index)			; Set Flag							;
+	POP		IX																;
+	RET																		;
+																			;
+;--------------------------- Set File Write Flag----------------------------;
+;--------------------------- Reset File Write Flag--------------------------;
+;Reset file write flag in FCB in (paramDE)									;
+; Used to indicate the FCB is dirty. Need to write on close					;
+ResetFileWriteFlag:															;
+	PUSH	IX																;
+	LD		IX,(paramDE)				; FCB address						;
+	RES		7,(IX + fcbS2Index)			; Reset Flag						;
+	POP		IX																;
+	RET																		;
+;--------------------------- Reset File Write Flag--------------------------;
+;-------------------------- Compare FCB Extents ----------------------------;
+; Enters:	A containing Target FCB EXT value								;
+;			HL Points at Possible FCB EXT value								;
+;compare extent# in A with that in C, return nonzero if they do not match	;
+CompareExtents:																;
+	PUSH	BC							; Save Callers Registers			;
+	PUSH	AF							; Save Target FCB EXT value			;
+	LD		A,(dpbEXM)					; Load the Extent Mask				;
+	CPL									; Complement for And				;
+	LD		B,A							; Put negated Mask into B			;
+	LD		A,(HL)						; Get Possible FCBs EXT				;
+	AND		B							; Apply the Mask					;
+	LD		C,A							; Low bits removed from C			;
+	POP		AF							; Restore Target FCB EXT value 		;
+	AND		B							; Apply the Mask					;
+	SUB		C							; Test if Equal ( Z Flag)			;
+	AND		maxExtValue					; Limit Size ?						;
+	POP		BC							; Restore Callers Registers			;
+	RET																		;
+;-------------------------- Compare FCB Extents ----------------------------;
+;---------------------Search for Directory Record --------------------------;
+;	Search for directory record of length C.								;
+; Target is pointed to by paramDE. The whole directory is searched.			;
+; If not found then dirEntryIndex is set to -1, else it points to the		;
+; matched directory record													;
+; Entry:	C = Search Length												;
+; Exit		dirEntryIndex	=	Matched directory index, if found			;
+;								-1 (EOD) if there is no match				;
+SearchForDirectoryRecord:													;
+	LD		A,0FFH															;
+	LD		(directoryIndex),A			; Initialize directory Index		;
+	LD		HL,searchLength													;
+	LD		(HL),C						; Save Search Length				;
+	LD		HL,(paramDE)				; Active FCB						;
+	LD		(searchAddress),HL			; Start of search					;
+	CALL	SetEndDirectory				; DirEntryIndex = -1				;
+	CALL	Home						; Reset Disk,Track, & Sector		;
+																			;
+GetNextDirectoryRecord:														;
+	LD		C,FALSE															;
+	CALL	ReadDirectory				; Read next Dir Record				;
+	CALL	AtEndOfDirectory												;
+	JR		Z,NoDirRecordsMatch				; Done if at EOD				;
+																			;
+	LD		HL,(searchAddress)			; Get Current Dir Entry				;
+	EX		DE,HL						; DE=beginning of Directory Entry	;
+	LD		A,(DE)						; User Number						;
+	CP		emptyDir					; Is Dir entry is empty				;
+	JR		Z,GetNextDirectoryRecord1	; Skip if empty						;
+																			;
+; Check to be sure we are sill in the Directory								;
+	PUSH	DE							; Save search address				;
+	CALL	StillInDirectory			; Still in the directorY			;
+	POP		DE							; Recall address					;
+	JR		NC,NoDirRecordsMatch		; Get out if past directory			;
+																			;
+GetNextDirectoryRecord1:													;
+	CALL	GetCurrentDirectoryRecord	; Point at next directory record	;
+	LD		A,(searchLength)												;
+	LD		C,A							; SearchLength to c (down)			;
+	LD		B,0							; Character Index (up)				;
+																			;
+TestNextPosition:															;
+	LD		A,(DE)															;
+	CP		QMARK						; ? is always a char match			;
+	JR		Z,SetNextPosition				; Done with this if it is ?		;
+																			;
+	LD		A,B																;
+	CP		fcbS1Index					; At File S1 position ?				;
+	JR		Z,SetNextPosition				; Done with this if it is ?		;
+ ; not the fcbS1Index field, extent field?									;
+	CP		fcbExtIndex					; Past File Type position ?			;
+	LD		A,(DE)						; Get next character				;
+	JR		Z,CheckExtents				; Skip to search extent				;
+	SUB		M							; Do they match ?					;
+	AND		07FH						; Strip MSBit						;
+	JR		NZ,GetNextDirectoryRecord	; Skip if not matched				;
+	JR		SetNextPosition				; Matched the character				;
+;																			;
+CheckExtents:																;
+	CALL	CompareExtents				; Matching EXTs is work				;
+	JR		NZ,GetNextDirectoryRecord	; Get out if not matched			;
+																			;
+SetNextPosition:															;
+	INC		DE							; Pointer to Looking FOR			;
+	INC		HL							; Pointer to Looking IN				;
+	INC		B							; Character Index in FCB			;
+	DEC		C							; Length of search					;
+	JR		NZ,TestNextPosition 											;
+; Match Found, entire name matches											;
+	LD		A,(dirEntryIndex)			; Get current Directory Index		;
+	AND		dirEntryMask				; Apply the mask					;
+	LD		(exitParameterByte),A		; Put 0...3. Match FOund			;
+																			;
+	LD		HL,directoryIndex			; Point at Directory Flag			;
+	LD		A,(HL)						; Get value							;
+	RLA									; Set Carry if Flag = -1			;
+	RET		NC							; Return with flag still -1			;
+																			;
+	XOR		A							; Else Clear the flag				;
+	LD		(HL),A															;
+	RET									;	and exit						;
+;------																		;
+ NoDirRecordsMatch:															;
+	CALL	SetEndDirectory				; Set End of Directory -1			;
+	LD		A,-1						; Put Failure Code					;
+	LD		(exitParameterByte),A		;	into return parameter			;
+	RET																		;
+;---------------------Search for Directory Record --------------------------;
+;---------------------------- Write Current Directory Entry ----------------;
+ WriteDir:																	;
+;	CALL	NewCheckSum						; initialize entry				;
+	LD		C,TRUE															;
+	CALL	CheckSumUtility					; Set New CheckSum				;
+																			;
+	CALL	SetDirDMA						; Directory DMA					;
+	LD		C,WriteDirectory				; Write type					;
+	CALL	WriteBuffer						; Write the buffer				;
+	JP		SetDataDMA						; Reset DMA to default			;
+																			;
+;---------------------------- Write Current Directory Entry ----------------;
+;----------------------------------- Write Buffer --------------------------;
+; Write buffer and check result. Current drive,Track, Sector and DMA		;
+; Are set up prior to calling this routine									;
+;																			;
+; On Entry: C = 0 => normal write operation		WriteAllocated				;
+;				1 => directory write operation	WriteDirectory				;
+;				2 => start of new block			WriteCleanBuffer			;
+WriteBuffer:																;
+	CALL	bcWrite						; Call into BIOS					;
+	OR		A							; Get return code					;
+	JP		NZ,Error_BadSector		; Error if not 00						;
+	RET																		;
+;----------------------------------- Write Buffer --------------------------;
+;---------------------------- Update Record Vars ---------------------------;
+;update variables from I/O in	FCB											;
+ UpdateRecordVariables:														;
+	CALL	GetFcbRecordDetails			; DE => FCB RC, HL => CurrentRecord ;
+	LD		A,(diskAccessType)			; If Seq IO it is set to 1			;
+	LD		C,A							;	and move it to C				;
+	LD		A,(currentFileRecord)		; Get NEXT_RECORD					;
+	ADD		A,C							; Update record count				;
+	LD		(HL),A						;	for CurrentRecord				;
+	EX		DE,HL															;
+	LD		A,(fcbRecordCount)												;
+	LD		(HL),A						;	and FCB RC						;
+	RET																		;
+;---------------------------- Update Record Vars ---------------------------;
+;-------------------------------- Random Seek ------------------------------;
+;	Record # = |000M EEEE| |ERRR RRRR|										;
+;		M => Module															;
+;		E => Extent															;
+;		R => Record in Extent												;
+RandomSeek:																	;
+	XOR		A																;
+	LD		(diskAccessType),A			; Set random access					;
+	PUSH	BC							; Save Read(TRUE) / Write (FALSE)	;
+	LD		IX,(paramDE)				; Get the FCB						;
+	LD		A,(IX +recordRandomLSB)		; Get LSB from Random Record		;
+	AND		7FH							; Strip E , left with |0RRR RRRR|	;
+	PUSH	AF							; recordSEQ							;
+	LD		A,(IX +recordRandomLSB)		; Get LSB from Random Record		;
+	RLA									; CY = bit 7 from LSB (M's LSBit)	;
+	LD		A,(IX +recordRandomMSB)		; Get MSB from Random Record		;
+	PUSH	AF							; Random record's MSB				;
+	RLA									; Shift LSBit into E |00ME EEEE|	;
+	AND		01FH						; Extent mask						;
+	LD		C,A							; Extent is in C					;
+	POP		AF							; Random record's MSB				;
+	RRA																		;
+	RRA																		;
+	RRA																		;
+	RRA									; MSB's Hi Nibble					;
+	AND		00FH						;	moved to Lo Nibble				;
+	LD		B,A							; S2' value in B					;
+	POP		AF							; recordSEQ							;
+																			;
+	LD		L,(IX + recordRandomOVF)										;
+	INC		L							; Insure that high byte				;
+	DEC		L							;	of ran rec = 00					;
+	LD		L,06					; "attempt to read beyond end of disk"	;
+	JR		NZ,RandomSeekError												;
+																			;
+	LD		(IX + recordSeq),A			; Put target record # in FCB		;
+	LD		A,(IX + fcbExtIndex)		; Target EXT in A, FCB EXT in C		;
+	CP		C							; Are we in the right directory ?	;
+	JR		NZ,RandomSeekClose			;	Skip if not						;
+																			;
+	LD		A,(IX + fcbS2Index)			; Target S2 in A, FCB S2 in C		;
+	CP		B							; Still in the right directory ?	;
+	AND		7FH							; Mask out MSBit					;
+	JR		Z,RandomSeekExit			;	Exit if yes						;
+																			;
+RandomSeekClose:															;
+	PUSH	BC							; Save EXT							;
+	PUSH	DE							; Save FCB							;
+	CALL	CloseDirEntry				; Close this directory entry		;
+	POP		DE							; FCB								;
+	POP		BC							; EXT								;
+	LD		L,03					; "CP/M could not close current extent" ;
+	LD		A,(exitParameterByte)		; Get result from Close				;
+	INC		A																;
+	JR		Z,RandomSeekErrorBadSeek	; Error exit if 0FFH				;
+																			;
+	LD		(IX + fcbExtIndex),C		; Update FCB Ext value				;
+	LD		(IX + fcbS2Index),B			; Update FCB S2 value				;
+	CALL	OpenFile					; Open the targeted Dir entry		;
+	LD		A,(exitParameterByte)		; is the file present?				;
+	INC		A																;
+	JR		NZ,RandomSeekExit			; Exit if open successful			;
+; cannot open the file, read mode?											;
+	POP		BC							; Get Read/Write flag				;
+	PUSH	BC							; Read/Write flag					;
+	LD		L,04					; "attempt to read unwritten extent"	;
+	INC		C							; Becomes 00 if read operation		;
+	JR		Z,RandomSeekErrorBadSeek	; Error exit if read operation		;
+																			;
+	CALL	MakeNewFile					; Make Directory Entry				;
+	LD		L,05						; "cannot create new extent"		;
+	LD		A,(exitParameterByte)		; Get result from Make				;
+	INC		A																;
+	JR		Z,RandomSeekErrorBadSeek	;	Exit if failed on Make			;
+																			;
+RandomSeekExit:																;
+	POP		BC							; Balance Stack						;
+	XOR		A							; Success							;
+	LD		(exitParameterByte),A											;
+	RET																		;
+																			;
+RandomSeekErrorBadSeek:														;
+	LD		(IX + fcbS2Index),0C0H		; Set Write protect & overflow		;
+RandomSeekError:															;
+	POP		BC							; Balance Stack						;
+	LD		A,L							; Get error code					;
+	LD		(exitParameterByte),A		;	and return it to caller			;
+	JP		SetFileWriteFlag			; Set flag for following close		;
+;-------------------------------- Random Seek ------------------------------;
+;--------------------------- Get Random Record Position -------------------;?
+; on Entry :																;?
+;			HL = pointer to directory entry									;?
+;			DE = fcbRCIndex/seqRecord index									;?
+GetRandomRecordPosition:													;?
+	EX		DE,HL						; DE = pointer to directory entry	;?
+	ADD		HL,DE															;?
+ ; DE=.buf(dptr) or .fcb(0), HL = .f(NEXT_RECORD/fcbRCIndex)				;?
+	LD		C,(HL)						; C = record count					;?
+	LD		B,0							; Make count a word value			;?
+																			;?
+	LD		HL,fcbExtIndex				; FCB Extent index					;?
+	ADD		HL,DE															;?
+	LD		A,(HL)						; ACC has Extent value				;?
+	RRCA																	;?
+	AND		80H							; A=e000 0000						;?
+	ADD		A,C																;?
+	LD		C,A																;?
+	LD		A,0																;?
+	ADC		A,B																;?
+	LD		B,A																;?
+ ; BC = 0000 000? errrr rrrr												;?
+	LD		A,(HL)															;?
+	RRCA																	;?
+	AND		LO_NIBBLE_MASK													;?
+	ADD		A,B																;?
+	LD		B,A																;?
+										; BC = 000? eeee errrr rrrr			;?
+	LD		HL,fcbS2Index													;?
+	ADD		HL,DE															;?
+	LD		A,(HL)						; A=XXX? mmmm						;?
+	ADD		A,A																;?
+	ADD		A,A																;?
+	ADD		A,A																;?
+	ADD		A,A							; cy=? A=mmmm 0000					;?
+	PUSH	AF																;?
+	ADD		A,B																;?
+	LD		B,A																;?
+ ; cy=?, BC = mmmm eeee errr rrrr											;?
+	PUSH	AF							; possible second carry				;?
+	POP		HL							; cy = lsb of L						;?
+	LD		A,L							; cy = lsb of A						;?
+	POP		HL							; cy = lsb of L						;?
+	OR		L 							; cy/cy = lsb of A					;?
+	AND		1 							; A = 0000 000? possible carry-out	;?
+	RET																		;?
+;--------------------------- Get Random Record Position -------------------;?
+;=========================== File Utilities ================================;
+;=========================== Directory Utilities ===========================;
+;--------------------------- Set End of Directory indicator ----------------;
+SetEndDirectory:															;
+	LD		HL,EOD						; Put -1 (0FFFFH) in index			;
+	LD		(dirEntryIndex),HL												;
+	RET																		;
+;--------------------------- Set End of Directory indicator ----------------;
+;--------------------------- Are we at End Of Directory --------------------;
+; Tests to see if we are at the End Of the Directory						;
+;																			;
+; exits With Z Flag Set if at EOD (dirEntryIndex = -1)						;
+;			Z Flag reset if still in directory								;
+																			;
+AtEndOfDirectory:															;
+	LD		HL,dirEntryIndex			; Point at LSB of Dir index			;
+	LD		A,(HL)						; Get it							;
+	INC		HL							; Point at MSB	of Dir Index		;
+	CP		M							; LSB = MSB ?						;
+	RET		NZ							;	exit if not if different		;
+										; Same.	are they = 0ffh?			;
+	INC		A							;	if yes, A= 0, set Z flag		;
+	RET																		;
+;--------------------------- Are we at End Of Directory --------------------;
+;--------------------------- Get Directory Element -------------------------;
+; compute the address of a directory element in Directory Buffer			;
+; Returns:	HL = Address of the specific directory Entry					;
+GetCurrentDirectoryRecord:													;
+	PUSH	BC							; Save BC							;
+	LD		HL,(caDirectoryDMA)			; Get the Directory Buffer base		;
+	LD		A,(dirBlockIndex)			; Get the index value				;
+	LD		C,A																;
+	XOR		A							; Set to Zero and reset CY			;
+	LD		B,A																;
+	ADC		HL,BC						; Compute the Entry Location		;
+	POP		BC							; Restore							;
+	RET																		;
+;--------------------------- Get Directory Element -------------------------;
+;--------------------------- Set Directory Entry ---------------------------;
+; Will update directory if not in the directory								;
+																			;
+SetDirectoryEntry:															;
+	CALL	StillInDirectory												;
+	RET	C								; Exit if still in the Directory	;
+																			;
+; StillInDirectory will return with:										;
+;									DE = Directory entry number				;
+;									HL = Address of entry number + 1		;
+	INC	DE																	;
+	LD	(HL),D																;
+	DEC	HL																	;
+	LD	(HL),E																;
+	RET																		;
+;--------------------------- Set Directory Entry ---------------------------;
+;--------------------------- Are we sill in the Directory ------------------;
+;Returns	:																;
+;			CY Set	if dirEntryIndex <= Directory Max Value					;
+;			CY Reset if dirEntryIndex	> Directory Max Value				;
+;			HL = (address of Index Value) + 1								;
+;			DE = Directory Index Value										;
+StillInDirectory:															;
+	LD		HL,(dirEntryIndex)												;
+	EX		DE,HL 						; DE = directory counter			;
+	LD		HL,(caDirMaxValue)			; HL = caDirMaxValue				;
+	LD		A,E																;
+	SUB		M																;
+	INC		HL																;
+	LD		A,D																;
+	SBC		A,(HL)						; Set CY if dirEntryIndex			;
+	RET										;	<= Directory Max Value		;
+;--------------------------- Are we sill in the Directory ------------------;
+;--------------------------- Scan Disk Map ---------------------------------;
+; Will Set/Reset the Allocation Map bit(s) for the current directory entry. ;
+;																			;
+; On Entry	C = TRUE	Set the Map bits for each block found in FCB		;
+;			C = FALSE	reset the Map bits for each block found in FCB		;
+																			;
+ScanDiskMap:																;
+	PUSH	BC							; Save the Set/Reset Info			;
+	CALL	GetCurrentDirectoryRecord	; HL points at the directory record ;
+	LD		DE,fcbDiskMapIndex			; DE is the index to the FCBs Map	;
+	ADD		HL,DE						; HL is now at start of the MAP		;
+	LD		C,fcbLength-fcbDiskMapIndex+1; Size of Disk Allocation Map + 1	;
+																			;
+ScanDiskMap0:																;
+	POP		DE							; Recall the set/reset Info			;
+	DEC		C																;
+	RET		Z							; Loop once for each disk map entry ;
+																			;
+	PUSH	DE							; Save the Set/Reset Info			;
+	LD		A,(byteAllocationFlag)		; Is Map Byte or Word sized			;
+	OR		A																;
+	JR		Z,ScanDiskMapWord			; Skip if Word Sized				;
+;	Byte Allocation scan operation											;
+	PUSH	BC							; Save counter						;
+	PUSH	HL							; Save map address					;
+	LD		C,(HL)															;
+	LD		B,0							; BC=block# for Byte				;
+	JR		ScanDiskMap2													;
+; Word scan operation														;
+ScanDiskMapWord:															;
+	DEC		C							; Adjust counter for 2 bytes		;
+	PUSH	BC							; Save counter						;
+	LD		B,(HL)															;
+	INC		HL																;
+	LD		C,(HL)						; BC=block# for Word				;
+	PUSH	HL							; Save map address					;
+																			;
+; Arrive here with BC=block#, E=0/1											;
+ ScanDiskMap2:																;
+	LD		A,C																;
+	OR		B							; Skip if = 0000 (No Block)			;
+	CALL	NZ,SetResetMapBit			; bit set to 0/1 its in C			;
+	POP		HL																;
+	INC		HL							; to next bit position				;
+	POP		BC							; recall counter					;
+	JR		ScanDiskMap0				; for another item					;
+																			;
+;--------------------------- Scan Disk Map ---------------------------------;
+;--------------------------- Get Closest Disk Block ------------------------;
+; Find the closest available disk block, and mark in Map as allocated		;
+; Enter	BC	= Block number to base the search on							;
+; Exit	HL	= 0000 if There are no available open blocks					;
+;			= block number of available and marked block					;
+																			;
+GetClosestBlock:															;
+			PUSH	BC					; save the starting Block #			;
+																			;
+			LD		HL,(dpbDSM)			; Maximum allocation value			;
+			CALL	DivideHLby8			; Length of Map						;
+			EX		DE,HL				; put size into DE					;
+			POP		HL					; Block number into HL				;
+			CALL	DivideHLby8			; Length of Map						;
+			EX		DE,HL				; Size in HL, Start in DE			;
+			XOR		A					; Reset CY							;
+			SBC		HL,DE				; Size for right					;
+; DE = Start Index															;
+; DE = Left Size															;
+; HL	= Right Size														;
+			PUSH	HL					; Save right size					;
+			PUSH	DE					; Save left size & Start Index		;
+			LD		A,0FFH				; Full Octet						;
+																			;
+			LD		HL,(caAllocVector)	; Start of Map						;
+			ADD		HL,DE				; Determine initial Octet			;
+; Set up Left side															;
+			POP		BC					; Left size							;
+			INC		BC					; adjust							;
+			PUSH	HL					; Save initial Octet				;
+			LD		DE,-1				; Flag as Left register set			;
+; HL = Initial Octet														;
+; BC = Left Size															;
+			EXX							; Use alternate registers			;
+			LD		DE,0000H			; Flag as Right register set		;
+			POP		HL					; Get Initial Octet					;
+			POP		BC					; Get Right Size					;
+			INC		BC					; adjust							;
+LookRight:																	;
+			CPI							; UnSet Bit?						;
+			JR		NZ,FoundFreeOctet	;	Then get out of search			;
+			JP		PO,NoMoreRight		; Exhausted Map to the right		;
+																			;
+			EXX							; Switch to the Left				;
+			CPD							; UnSet Bit?						;
+			JR		NZ,FoundFreeOctet	;	Then get out of search			;
+			JP		PO,NoMoreLeft		; Exhausted Map to the right		;
+			EXX							; switch to right					;
+			JR		LookRight			; Keep on looking					;
+;			----------------												;
+NoMoreLeft:																	;
+			EXX							; Switch to Right					;
+NoMoreLeftLoop:																;
+			CPI																;
+			JR		NZ,FoundFreeOctet	;	Then get out of search			;
+			JP		PO,NoFreeBlocks		; Exhausted Map to the right		;
+			JR		NoMoreLeftLoop		; Keep looking						;
+			HALT															;
+NoMoreRight:																;
+			EXX							; Switch to Left					;
+NoMoreRightLoop:															;
+			CPD																;
+			JR		NZ,FoundFreeOctet	;	Then get out of search			;
+			JP		PO,NoFreeBlocks		; Exhausted Map to the right		;
+			JR		NoMoreRightLoop		; Keep looking						;
+			HALT															;
+NoFreeBlocks:																;
+			LD		HL,0000H			; Return 0000 in HL					;
+			RET																;
+;			----------------												;
+FoundFreeOctet:																;
+			CP		E					; Left or Right						;
+			JR		Z,FoundFreeOctet1	;	it was left						;
+			DEC		HL					; Adjust for direction				;
+			JR		FoundFreeOctet2											;
+																			;
+FoundFreeOctet1:															;
+			INC		HL					; Adjust for direction				;
+FoundFreeOctet2:															;
+			LD		BC,00				; need to keep track of bit			;
+FoundFreeOctet3:															;
+			RLC		(HL)													;
+			INC		BC														;
+			JR		C,FoundFreeOctet3	; Loop if Bit 7 set					;
+			SET		0,(HL)				; Make map bit set					;
+			LD		B,C					; Put count in B					;
+FoundFreeOctet4:															;
+			RRC		(HL)													;
+			DJNZ	FoundFreeOctet4		; Restore the Octet					;
+			DEC		BC					; adjust for Zero based value		;
+			PUSH	BC					; Save the bit index				;
+			LD		BC,(caAllocVector)	; Get Map start						;
+			XOR		A					; Clear CY							;
+			SBC		HL,BC				; Get how far in the map			;
+			CALL	MultiplyHLby8			; Calculate the Octet			;
+			POP		BC					; Restore index into Octet			;
+			ADD		HL,BC				; This is the Block Number			;
+			RET																;
+;--------------------------- Get Closest Disk Block ------------------------;
+;---------------------------- Copy Dir Entry To User's Buffer --------------;
+CopyDirEntryToUserDMA:														;
+	LD		HL,(caDirectoryDMA)			; Point at Directory buffer			;
+	LD		DE,(initDAMAddress)			; Point at User's Buffer			;
+	LD		BC,cpmRecordSize			; The entire record					;
+	LDIR								; Move it							;
+	RET																		;
+;---------------------------- Copy Dir Entry To User's Buffer --------------;
+;--------------------- Return last Directory Index to Caller ---------------;
+DirLocationToReturnLoc:														;
+	LD		A,(directoryIndex)			; Get last directory Index			;
+	LD		(exitParameterByte),A		; Save for return to Caller			;
+	RET																		;
+;--------------------- Return last Directory Index to Caller ---------------;
+;--------------------------- Check OK to Write to Disk ---------------------;
+ CheckWrite:																;
+	CALL	IsDiskWriteProtected		; Is this disk Write Protected?		;
+	RET		Z							; OK to write						;
+	JP		Error_DiskReadOnly			; Report read only disk error		;
+;--------------------------- Check OK to Write to Disk ---------------------;
+;--------------------------- Check File Write Protect Status ---------------;
+ CheckRODirectory:															;
+	CALL	GetCurrentDirectoryRecord	; Use Entry in Directory Buffer		;
+; Use HL as the directory entry in Question									;
+ CheckROFile:																;
+	LD		DE,fcbROfileIndex			; Index into FC for RO				;
+	ADD		HL,DE						; point at the byte					;
+	LD		A,(HL)															;
+	RLA									; Set CY if RO bit set				;
+	RET		NC							; Return OK							;
+	JP		Error_FileReadOnly			; Report to read only File			;
+;--------------------------- Check File Write Protect Status ---------------;
+;------------------------- Copy FCB To Directory record --------------------;
+; On Entry:																	;
+;			C = Starting position											;
+;			E = length of copy												;
+;copy the whole file control block											;
+CopyFCB:																	;
+	LD		C,0																;
+	LD		E,fcbLength						; Copy all of the FCB			;
+; On Entry:																	;
+;			C = Starting position											;
+;			E = length of copy												;
+CopyDir:																	;
+	LD		D,0								; Make length a word value		;
+	PUSH	DE								; Length						;
+	LD		B,0								; Make index a word				;
+	LD		HL,(paramDE)					; HL = source for data			;
+	ADD		HL,BC															;
+	EX		DE,HL															;
+	CALL	GetCurrentDirectoryRecord		; HL pointer to Dir Record		;
+	EX		DE,HL															;
+	POP		BC								; Length						;
+	LDIR																	;
+	CALL	SeekDir							; Seek to the dir entry			;
+	JP		WriteDir						; Write the directory element	;
+;------------------------- Copy FCB from Directory record ------------------;
+;-------------------------------- Get Block Number -------------------------;
+ ;compute disk block number from current FCB								;
+ GetBlockNumber:															;
+	CALL	GetDiskMapIndex				;Return Alloc block index			;
+	LD		C,A																;
+	LD		B,0																;
+	CALL	GetDiskMapValue				; Convert to Disk record			;
+	LD		(absoluteCPMRecord),HL		; Save								;
+	RET																		;
+;-------------------------------- Get Block Number -------------------------;
+;-------------------------------- Get Disk Map Index -----------------------;
+;Return the	disk map Index for current File Record in the ACC				;
+GetDiskMapIndex:															;
+	LD		HL,dpbBSH					; Block# = Record# / (2***dpbBSH)	;
+	LD		B,(HL)						; shift count						;
+	LD		A,(currentFileRecord)											;
+GetDiskMapIndexLoop:														;
+	SRL		A																;
+	DJNZ	GetDiskMapIndexLoop			; Loop till done					;
+	NOP																		;
+	RET																		;
+;-------------------------------- Get Disk Map Index -----------------------;
+;-------------------------------- Get Disk Map Value -----------------------;
+; Enter with Disk Map Index in BC											;
+; Return disk map value	in HL												;
+ GetDiskMapValue:															;
+	LD		HL,(paramDE)				; FCB								;
+	LD		DE,fcbDiskMapIndex			; Index to Allocation Map			;
+	ADD		HL,DE						; Address of Allocation Map Start	;
+	ADD		HL,BC						; Point at the targeted map entry	;
+	LD		A,(byteAllocationFlag)		; Is this a byte or word			;
+	OR		A																;
+	JR		Z,GetDiskMap16Bit			; Skip if word value				;
+	LD		L,(HL)						;	else its a byte value			;
+	LD		H,0							;load the byte into HL				;
+	RET																		;
+																			;
+GetDiskMap16Bit:															;
+	ADD		HL,BC						; make it double width				;
+	LD		D,(HL)															;
+	INC		HL																;
+	LD		E,(HL)						; Load word value into DE			;
+	EX		DE,HL						; return value in HL				;
+	RET																		;
+;-------------------------------- Get Disk Map Value -----------------------;
+;-------------------------------- Allocate The Block -----------------------;
+;is	block allocated															;
+WasBlockAllocated:															;
+	LD		HL,(absoluteCPMRecord)		; Get the Block Number				;
+	LD		A,L							; ZFlag set if						;
+	OR		H							;	absoluteCPMRecord = 0			;
+	RET																		;
+;-------------------------------- Allocate The Block -----------------------;
+;----------------------------- Set Actual Record Add -----------------------;
+																			;
+;compute actual record address												;
+ ; result = absolute CPMRecord * ( 2**BSH)									;
+SetActualRecordAdd:															;
+	LD		A,(dpbBSH)					; Block Shift to loop control		;
+	LD		B,A																;
+	LD		HL,(absoluteCPMRecord)											;
+																			;
+SetActualRecordAddLoop:														;
+	ADD		HL,HL															;
+	DJNZ	SetActualRecordAddLoop											;
+; HL has Record number for start of the block;								;
+	LD		A,(dpbBLM)					; Get block mask to get current		;
+	LD		C,A							;	File Record mod Block			;
+	LD		A,(currentFileRecord)		; Get index into block				;
+	AND		C							; Record index in Block				;
+	OR		L																;
+	LD		L,A							; to HL								;
+	LD		(absoluteCPMRecord),HL		; Absolute CPM Record=HL			;
+; *** Absolute CPM Record now has current record number						;
+; - Starting record number + index into block								;
+	RET																		;
+;----------------------------- Set Actual Record Add -----------------------;
+;-------------------------------- Open Next Extent -------------------------;
+ ;close the current extent	and open the next one if possible.				;
+ ;readModeFlag is true if in read mode										;
+ OpenNextExt:																;
+	XOR		A							; Set to 00							;
+	LD		(fcbCopiedFlag),A			; Clear Flag						;
+	CALL	CloseDirEntry				; Close current extent.				;
+	CALL	AtEndOfDirectory			; Is the directory full?			;
+	RET		Z							;	exit it yes						;
+																			;
+	CALL	GetExtentAddress			; HL at FCB's EXT					;
+	LD		A,(HL)						; Get previous EXT value			;
+	INC		A							; Add one to it						;
+	AND		maxExtValue					; Limit to max value				;
+	LD		(HL),A						; Put it back into the FCB			;
+	JR		Z,OpenNextModule			;	if = 0, need to open new Module	;
+																			;
+	LD		B,A							; put Ext value in B				;
+	LD		A,(dpbEXM)					; Get the Extent Mask				;
+	AND		B							; Mask out unwanted bits			;
+; if result is zero, then not in the same group								;
+	LD		HL,fcbCopiedFlag			; Point at Copied Flag				;
+	AND		M							;	00 in Acc if not written		;
+	JR		Z,OpenNextExt1				;	go to next physical extent if 0	;
+	JR		UpdateFCB					;	else continue					;
+																			;
+OpenNextModule:																;
+	LD		BC,fcbS2Index-fcbExtIndex	; Index difference between EXT & S2 ;
+	ADD		HL,BC						; Add to HL( at EXT) gives S2		;
+	INC		M							; Increment the Module number		;
+	LD		A,(HL)						; get the new Module number			;
+	AND		moduleMask					; Mask out unwanted bits			;
+	JR		Z,OpenNextExtError			; If overflow to zero, error exit	;
+																			;
+OpenNextExt1:																;
+	LD		C,nameLength				; Set search/match size				;
+	CALL	SearchForDirectoryRecord	; Find the file's directory record	;
+	CALL	AtEndOfDirectory			; At end of Directory ?				;
+	JR		NZ,UpdateFCB				;	No, then keep going				;
+																			;
+	LD		A,(readModeFlag)			;	else at EOD						;
+	INC		A							; 0ffh becomes 00 if read			;
+	JR		Z,OpenNextExtError			; All done if a read				;
+																			;
+	CALL	MakeNewFile					; With write we can extend file		;
+	CALL	AtEndOfDirectory			; Is there room in the directory ?	;
+	JR		Z,OpenNextExtError			;	no, exitParameterByte = 1		;
+	JR		OpenNextExt3													;
+																			;
+UpdateFCB:																	;
+	CALL	CopyDirRecordToFCB			; Update FCB						;
+OpenNextExt3:																;
+	CALL	SetRecordVars				; Set variables for current FCB		;
+	XOR		A																;
+	LD		(exitParameterByte),A		; Set exitParameterByte = 0			;
+	RET																		;
+																			;
+OpenNextExtError:															;
+	CALL	SetExitParamTo1				; ExitParameterByte = 1				;
+	JP		SetFileWriteFlag			; Ensure that it will not be closed ;
+;-------------------------------- Open Next Extent -------------------------;
+;=========================== Directory Utilities ===========================;
+;===========================================================================;
+;=========================== General	Utilities ===========================;
+;--------------------------- Rotate HL right by value in C -----------------;
+																			;
+; HL = Value to be rotated Right											;
+;	B = Amount to shift														;
+RotateRightHLbyB:															;
+ 		SCF								; Set carry flag, expect LSBit = 1	;
+		BIT		0,L						; is LSB set?						;
+		JR		NZ, RotateRightHLbyB1		; Skip if LSB set				;
+		CCF								; else Clear Carry flag				;
+RotateRightHLbyB1:															;
+		RR		H						; Shift thru CY						;
+		RR		L						; ditto								;
+		DJNZ	RotateRightHLbyB											;
+		RET																	;
+																			;
+;--------------------------- Rotate HL right by value in C -----------------;
+;---------Divide HL by 8	&&	Shift HL right by value in C ---------------;
+; HL = Value to be shifted Right											;
+DivideHLby8:																;
+		LD		B,3						; 8 = 2**3							;
+;	B = Amount to shift														;
+ShiftRightHLbyB:															;
+		XOR		A						; else Clear Carry flag				;
+		RR		H						; Shift thru CY						;
+		RR		L						; ditto								;
+		DJNZ	ShiftRightHLbyB												;
+		RET																	;
+;---------Divide HL by 8	&&	Shift HL right by value in C ---------------;
+;---------Multiply HL by 8	&&	Shift HL left by value in C ----------------;
+; HL = Value to be shifted Left												;
+MultiplyHLby8:																;
+		LD		B,3						; 8 = 2**3							;
+;	B = Amount to shift														;
+ShiftLeftHLbyB:																;
+		XOR		A						; else Clear Carry flag				;
+		RL		L						; Shift thru CY						;
+		RL		H						; ditto								;
+		DJNZ	ShiftLeftHLbyB												;
+		RET																	;
+;---------Multiply HL by 8	&&	Shift HL left by value in C ----------------;
+;----------------------------- Merge ---------------------------------------;
+; Merge Map Block Numbers between FCB and directory record					;
+; HL has pointer to map for either dir record or FCB,						;
+; DE has the other pointer. If HL is pointing to a non empty block, then	;
+; it just returns, Else it copies the block number to where DE is pointing	;
+																			;
+ Merge:																		;
+	LD		A,(HL)						; Get the first byte				;
+	INC		HL																;
+	OR		M							; OR it with the second byte		;
+	DEC		HL							; Restore HL to start				;
+	RET		NZ							; Exit if both are 0s				;
+; HL points to a non Zero value												;
+	LD		A,(DE)						; Get the first byte				;
+	LD		(HL),A						; Move it							;
+	INC		DE																;
+	INC		HL							; Increment both pointers			;
+	LD		A,(DE)						; Get the second byte				;
+	LD		(HL),A						; Move it							;
+	DEC		DE																;
+	DEC		HL							; Restore HL & DE to start			;
+	RET																		;
+;----------------------------- Merge ---------------------------------------;
+;------------------------- Set Exit Parameter To 1 -------------------------;
+SetExitParamTo1:															;
+	LD		A,1																;
+	LD		(exitParameterByte),A		; Put a 1 in the exit parameter		;
+	RET																		;
+;------------------------- Set Exit Parameter To 1 -------------------------;
+;=========================== General	Utilities ==========================;
+;--------------------------- Read Directory Record -------------------------;
+; read a directory entry into the directory buffer							;
+ReadDirRecord:																;
+	CALL	SetDirDMA					; System Assigned Buffer			;
+	CALL	ReadBuffer					; Go to BIOS for the read			;
+	JP		SetDataDMA					; Restore DMA						;
+;--------------------------- Read Directory Record -------------------------;
+;--------------------------- Read Directory --------------------------------;
+; Read next directory entry													;
+; Enter :																	;
+;		C =	TRUE initializing and setting CheckSum							;
+;			<> TRUE Checking existing CheckSum								;
+ ReadDirectory:																;
+	LD		DE,(dpbDRM)					; Number of Dir Entries-1			;
+	LD		HL,(dirEntryIndex)			; Prior Directory Index				;
+	INC		HL							; Increment the Index				;
+	LD		(dirEntryIndex),HL			; Save current directory index		;
+	XOR		A							; Clear the CY flag					;
+	SBC		HL,DE						; Are we at end Of the directory	;
+	JR		NZ,ReadDirectory0			;	No the process					;
+	CALL	SetEndDirectory				;	else we are done				;
+	RET																		;
+																			;
+; Calculate the entry index Position in Buffer								;
+ReadDirectory0:																;
+	LD		A,(dirEntryIndex)			; Get the index						;
+	AND		dirEntryMask				; Determine Entry number			;
+	LD		B,fcbShift					; Shift value for Record Size		;
+ReadDirectory1:																;
+	ADD		A,A																;
+	DJNZ	ReadDirectory1													;
+	LD		(dirBlockIndex),A			; Now save the Index into to buffer ;
+	OR		A							; Is this the 1st entry?			;
+	RET		NZ							;	return if not.					;
+																			;
+	PUSH	BC							; Save init Flag (CheckSum)			;
+	CALL	SeekDir						; Set up for Directory Read			;
+	CALL	ReadDirRecord				; Read the directory record			;
+	POP		BC							; Recall initialization flag		;
+	JP		CheckSumUtility				; Checksum the directory			;
+;--------------------------- Read Directory --------------------------------;
+;--------------------------- Seek Directory --------------------------------;
+ ;seek the record containing the current directory entry					;
+SeekDir:																	;
+	LD		HL,(dirEntryIndex)			; Directory Entry Index				;
+	LD		B,dirEntryShift				; 4 entries per record				;
+	CALL	ShiftRightHLbyB													;
+	LD		(absoluteCPMRecord),HL											;
+	LD		(dirRecord),HL				; Save								;
+	JP		Seek															;
+;--------------------------- Seek Directory --------------------------------;
+;--------------------------- Seek ------------------------------------------;
+Seek:																		;
+	LD		BC,0FFFFH					; Initialize the track counter		;
+	LD		HL,(absoluteCPMRecord)		; Get the record in question		;
+	LD		DE,(dpbSPT)					; Get Sectors Per track				;
+																			;
+Seek0:																		;
+	INC		BC							; Divide the record					;
+	XOR		A							;	by the sectors per track		;
+	SBC		HL,DE															;
+	JR		NC,Seek0					;	to get the gross track number	;
+																			;
+																			;
+	ADD		HL,DE						; Gets the sector in the track		;
+	PUSH	HL							; Save Index Sector					;
+																			;
+	PUSH	IX							; Save IX							;
+	LD		IX,(caTrack)													;
+	LD		(IX + 0),C														;
+	LD		(IX + 1),B					; Save the Gross Track				;
+																			;
+	EX		DE,HL						; Take the index from the record	;
+	LD		HL,(absoluteCPMRecord)											;
+	XOR		A																;
+	SBC		HL,DE						;	and you get the Block start		;
+																			;
+	LD		IX,(caSector)													;
+	LD		(IX + 0),L														;
+	LD		(IX + 1),H					; Save the Block Start				;
+	POP		IX							; Restore IX						;
+																			;
+	LD		HL,(dpbOFF)					; Get directory Offset (tracks)		;
+	ADD		HL,BC						;	to add to the gross Track		;
+	PUSH	HL							;	which yields the net or			;
+	POP		BC							;	actual track for the record		;
+	CALL	bcSettrk					; Set the net (actual) track		;
+																			;
+	POP		BC							; Get the sector within the track	;
+	JP		bcSetsec					;	and set it for the seek			;
+																			;
+;--------------------------- Seek ------------------------------------------;
+;--------------------------- Check Sum Utility -----------------------------;
+; At entry																	;
+;			C	= TRUE	-	Set the Checksum values in Vector				;
+;			C <> TRUE	-	Validate Checksum value in Vector				;
+																			;
+CheckSumUtility:															;
+	LD		HL,(dpbCKS)														;
+	LD		DE,(dirRecord)													;
+	XOR		A																;
+	SBC		HL,DE							; Skip if past the Directory	;
+	RET		C								;	Entries						;
+																			;
+	PUSH	BC								; Save New/Validate Flag		;
+																			;
+; CheckSum = MOD( SUM(all bytes in The Record), 0FFH)						;
+ComputeCheckSum:															;
+	LD		B,cpmRecordSize													;
+	LD		HL,(caDirectoryDMA)												;
+	XOR																		;
+ComputeCheckSum1:															;
+	ADD		A,(HL)															;
+	INC		HL																;
+	DJNZ	ComputeCheckSum1												;
+; Checksum is in ACC														;
+																			;
+	LD		HL,(caCheckSum)				; Address of check sum vector		;
+	LD		DE,(dirRecord)				; Index to this record				;
+	ADD		HL,DE						; Address of this record in vector	;
+	POP		BC							; Retrieve New/Validate Flag		;
+	INC		C																;
+	JR		Z,SetNewCheckSum			; Set the Value if Flag was TRUE	;
+																			;
+	CP		M							; Else we are checking the value	;
+	RET		Z							; Exit if OK						;
+; possible checksum error, are we beyond the end of the disk?				;
+	CALL	StillInDirectory												;
+	RET		NC							; OK, if not in the directory		;
+	CALL	SetDiskReadOnly				;	else the checksums don't match	;
+	RET									;	Set disk RO before returning	;
+																			;
+ ;initializing the checksum													;
+ SetNewCheckSum:															;
+	LD		(HL),A															;
+	RET																		;
+;--------------------------- Check Sum Utility -----------------------------;
+;---------------------------------- Is Bit Set -----------------------------;
+; Enter HL	contains the bit map											;
+;		B	Has the bit number (0...F)										;
+; Return ZFlag = 1 if bit is reset (0)										;
+;				= 0 if bit is set (1)										;
+IsBitSet:																	;
+		INC		B															;
+IsBitSetLoop:																;
+ 		SCF								; Set carry flag, expect LSBit = 1	;
+		BIT		0,L						; is LSB set?						;
+		JR		NZ, IsBitSet1				; Skip if LSB set				;
+		CCF								; else Clear Carry flag				;
+IsBitSet1:																	;
+		RR		H						; Shift thru CY						;
+		RR		L						; ditto								;
+		DJNZ	IsBitSetLoop												;
+		BIT		7,H						; Bit moved from L LSBit to H MSBit	;
+		RET																	;
+;---------------------------------- Is Bit Set -----------------------------;
+;============================ Set/Reset Vector Bit =========================;
+;---------------------------------- Set Vector Bit -------------------------;
+; Enter	HL	contains the bit map vector										;
+;		B	Has the bit number (0...F)										;
+; Return HL	Contains the modified bit map vector							;
+SetVectorBit:																;
+		PUSH	BC						; Save the Bit Number				;
+		CALL	IsBitSet				; Put the bit in the LSBit			;
+																			;
+		POP		BC						; Get the bit position				;
+		SET		7,H														;
+		JR		ReAlignVector												;
+;---------------------------------- Set Vector Bit -------------------------;
+;---------------------------------- Reset Vector Bit -----------------------;
+; Enter	HL	contains the bit map vector										;
+;		B	Has the bit number (0...F)										;
+; Return HL	Contains the modified bit map vector							;
+ResetVectorBit:																;
+		PUSH	BC						; Save the Bit Number				;
+		CALL	IsBitSet				; Put the bit in the LSBit			;
+																			;
+		POP		BC						; Get the bit position				;
+		RES		7,H															;
+; Fall thru to ReAlignVector												;
+;---------------------------------- Reset Vector Bit -----------------------;
+;---------------------------------- Set VectorBit --------------------------;
+; Adjusts the HL register to its Original Alignment after IsBitSet			;
+																			;
+ReAlignVector:																;
+		INC		B															;
+ReAlignMapLoop:																;
+ 		SCF								; Set carry flag, expect LSBit = 1	;
+		BIT		7,H						; is LSB set?						;
+		JR		NZ, ReAlignMap1				; Skip if LSB set				;
+		CCF								; else Clear Carry flag				;
+ReAlignMap1:																;
+		RL		L						; Shift thru CY						;
+		RL		H						; ditto								;
+		DJNZ	ReAlignMapLoop												;
+		RET																	;
+;============================ Set/Reset Vector Bit =========================;
+;============================= Error message World =========================;
+;																			;
+Error_Select:																;
+	LD		HL,ErrMsg_Selection			; Error Message						;
+	JP		WaitBeforeBoot				; Wait for console input before boot;
+																			;
+Error_DiskReadOnly:															;
+	LD		HL,ErrMsg_ReadOnlyDisk		; Error Message						;
+	JP		WaitBeforeBoot				; Wait for console input before boot;
+																			;
+Error_FileReadOnly:															;
+	LD		HL,ErrMsg_ReadOnlyFile		; Error Message						;
+	JP		WaitBeforeBoot				; Wait for console input before boot;
+																			;
+Error_BadSector:															;
+	LD		HL,ErrMsg_BadSector			; Error Message						;
+	CALL	DisplayErrorAndWait			; Check input from console			;
+	CP		CTRL_C															;
+	JP		Z,WarmBoot					; Reboot if response is CTRL_C		;
+	RET																		;
+;---------------------------------------------------------------------------;
+WaitBeforeBoot:																;
+	CALL	DisplayErrorAndWait												;
+	JP		WarmBoot														;
+;---------------------------------------------------------------------------;
+																			;
+DisplayErrorAndWait:														;
+	PUSH	HL							; Save message pointer				;
+	CALL	showCRLF					; Line Feed and Carriage Return		;
+	LD		A,(currentDisk)				; Disk in question					;
+	ADD		A,ASCII_A					; Make ASCII out of it				;
+	LD		(ErrMsg_BDOS_DISK),A		; Put into the error message		;
+	LD		BC,ErrMsg_BDOS				; Load the start of message			;
+	CALL	Print						; Display it						;
+	POP		BC							; Load the rest of message			;
+	CALL	Print						; Display it						;
+	JP		ConIn						; Get the input character			;
+																			;
+;***************************************************************************;
+																			;
+ErrMsg_BDOS:			DB		'BDOS Err On '								;
+ErrMsg_BDOS_DISK:		DB		' : $'										;
+ErrMsg_BadSector:		DB		'Bad Sector$'								;
+ErrMsg_Selection:		DB		'Select$'									;
+ErrMsg_ReadOnlyFile:	DB		'R/O File$'									;
+ErrMsg_ReadOnlyDisk:	DB		'R/O Disk$'									;
+																			;
+;============================= Error message World =========================;
+;********* file control block (fcb) constants ********************
+fcbLength			EQU		20H			; File control block size
+fcbROfileIndex		EQU		09H			; High order of first type char
+fcbHiddenfileIndex	EQU		0AH			; Hidden file in dir command
+fcbExtIndex			EQU		0CH			; Extent number field index
+fcbS1Index			EQU		0DH			; S1 index
+fcbS2Index			EQU		0EH			; S2 data module number index
+fcbRCIndex			EQU		0FH			; Record count field index
+fcbDiskMapIndex		EQU		10H			; Disk map start
+fcbExtIndexLSB		EQU		0CH			; LSB of Extent
+fcbExtIndexMSB		EQU		0EH			; Bit 7 = Write protected
+fcbCurrentRecord	EQU		21H			; Next record to read/write
+highestRecordNumber	EQU		RecordsPerExtent - 1; Last record# in extent
+dirEntriesPerRecord	EQU		cpmRecordSize/fcbLength; Directory entries / record
+dirEntryShift		EQU		2			; Log2(dirEntriesPerRecord)
+dirEntryMask		EQU		dirEntriesPerRecord-1
+fcbShift			EQU		5			; Log2(fcbLength)
+;
+maxExtValue			EQU		31			; Largest extent number
+moduleMask			EQU		15			; Limits module number value
+writeFlagMask		EQU		80h			; File write flag is high order fcbS2Index
+nameLength			EQU		15			; Name length
+emptyDir			EQU		0E5H			; Empty empty directory entry
+recordSeq			EQU		fcbLength		; Next Sequential Record
+recordRandom		EQU		recordSeq + 1	; Random record field (2 bytes)
+recordRandomLSB		EQU		recordRandom 	; LSB of Random Record
+recordRandomMSB		EQU		recordRandom + 1	; MSB of Random Record
+recordRandomOVF		EQU		recordRandom + 2	; Random Record Overflow
+ ;***common values shared between bdosi and bdos******************
+currentUserNumber:	DB	0					; usrcode current user number
+currentDisk:		DB	-1					; curdsk current disk number
+ ;********************* Local Variables ***************************
+ ;	************************
+ ;	*** Initialized Data ***
+emptyFCB:		DB		emptyDir		; 0E5 = available dir entry
+readOnlyVector:	DW		0				; Read only disk vector
+loggedDisks:	DW		0				; Logged-in disks
+initDAMAddress:	DW		DMABuffer		; Initial DMA address
+;	*** Current Disk attributes ****
+; These are set upon disk select
+; data must be adjacent, do not insert variables
+; address of translate vector, not used
+; ca - currentAddress
+caDirMaxValue:		DW	0000H			; Pointer to cur dir max value
+caTrack:			DW	0000H			; Current track address
+caSector:			DW	0000H			; Current Sector
+caListSizeStart:
+caDirectoryDMA:		DW	0000H			; Pointer to directory DMA address
+caDiskParamBlock:	DW	0000H			; Current disk parameter block address
+caCheckSum:			DW	0000H			; Current checksum vector address
+caAllocVector:		DW	0000H			; Current allocation vector address
+caListSizeEnd:
+caListSize			EQU	caListSizeEnd - caListSizeStart
+;	***** Disk Parameter Block *******
+; data must be adjacent, do not insert variables
+; dpb - Disk Parameter Block
+dpbStart:
+dpbSPT:		DW	0000H					; Sectors per track
+dpbBSH:		DB	0000H					; Block shift factor
+dpbBLM:		DB	00H						; Block mask
+dpbEXM:		DB	00H						; Extent mask
+dpbDSM:		DW	0000H					; Maximum allocation number
+dpbDRM:		DW	0000H					; Largest directory number
+dpbDABM:	DW	0000H					; Reserved allocation bits for directory
+dpbCKS:		DW	0000H					; Size of checksum vector
+dpbOFF:		DW	0000H					; Offset tracks at beginning
+dpbEnd:
+dpbSize		EQU	dpbEnd - dpbStart
+ ;
+ ;	************************
+SEQ_ACCESS		EQU		01H				; Indicates sequential access to file
+RANDOM_ACCESS	EQU		00H				; Indicates random access to file
+diskAccessType:	DB		00H				; Set to 1 if sequential disk operation
+caSkewTable:	DW		0000H			; Address of translate vector
+fcbCopiedFlag:	DB		00H				; Set true if CopyFCB called
+readModeFlag:	DB		00H				; Read mode flag for Open NextExt
+directoryIndex:	DB		00H				; Directory flag in rename, etc.
+diskMapIndex:	DB		00H				; Local for Disk_Write
+searchLength:	DB		00H				; Search length
+searchAddress:	DW		0000H			; Search address
+byteAllocationFlag:	DB	00H				; Set true if single byte allocation map
+fResel:				DB	00H				; Re selection flag
+entryDisk:			DB	00H				; Disk on entry to BDOS
+fcbDisk:			DB	00H				; Disk named in FCB
+fcbRecordCount:		DB	00H				; Record count from current FCB
+extentValue:		DB	00H				; Extent number and dpbEXM from current FCB
+currentFileRecord:	DW	0000H			; Current File Record - fcbCurrentRecord
+absoluteCPMRecord:	DW	0000H			; Raw record ( 4 records / Sector)( 4 Sectors per block)
+;
+;	local variables for directory access
+dirBlockIndex:		DB	00H				; Directory block Index 0,1,2,3
+dirEntryIndex:		DW	00H				; Directory entry Index	0,1,...,dpbDRM
+dirRecord:			DW	00H				; Directory record 0,1,...,dpbDRM/4
+ ;********************** data areas ******************************
+;---------------------------------- Stack Area--------------------------------;
+stackBottom:		DS	STACK_SIZE * 2	; stack size						;
+bdosStack:
+																	;
+;---------------------------------- Stack Area--------------------------------;
+ ;	end of Basic I/O System
+ ;-----------------------------------------------------------------;
+ *****************************************************************
+ ;
+Z_HighestLocation:
+Z_MemoryLeft			EQU	(BIOSStart-1) - Z_HighestLocation

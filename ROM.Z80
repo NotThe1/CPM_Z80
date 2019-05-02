@@ -1,0 +1,71 @@
+;		File created by MakeZ80Source on Tue Sep 18 10:06:02 EDT 2018 from:
+;		C:\Users\admin\Dropbox\Resources\CPM\CurrentOS\8080\ROM.asm
+; ROM.Z80
+; Rom for BIOS set up for diskA to be 3.5HD (1.44MB) disk
+
+; 2019-03-02 Refactored constants and removed header files
+; 2018-12-28 Adapted to also be used in BIOS Boot routine
+; 2018-11-23 Moved code away from the DiskControlBlock
+; 2018-11-22  Z80 idiom
+; 2017-03-02 Refactored the CP/M Suite
+
+
+	$Include ./DCTheader.Z80
+CR					EQU		0DH			; Carriage Return
+EOM					EQU		00H			; End Of Message
+LF					EQU		0AH			; Line Feed
+TPA					EQU		0100H		; Transient Program Address
+CONSOLE				EQU		0ECH		; Console data address
+DMABuffer			EQU		080H		; Default "DMA" address used as buffer
+	ORG		0000
+
+CodeStart:
+	LD		HL,DiskControlTable			; Point at ROM's DCT
+	CALL	ReadRawDisk					; Execute the disk read
+	JP		NC,TPA						; Now execute the boot loader;
+	CALL	NoDisk;						; Got here because no disk in drive
+	HALT								; STOP!
+ ReadRawDisk:							; Enter with DiskControlBlock pointer in HL
+	LD		(DiskCommandBlock),HL		; put it into the Command block for drive A:
+
+	LD		HL,DiskControlByte			; Point at Disk Control location
+	LD		(HL),080H					; Activate the controller
+
+WaitForBootComplete:
+	LD		A,(HL)						; Get the control byte
+	OR		A							; Is it set to 0 (Completed operation) ?
+	JR		NZ,WaitForBootComplete			; if not try again
+
+	LD		A,(DiskStatusLocation)		; After operation what's the status?
+	CP		080H						; Any errors ?
+	RET									; Exit with result in the CCs
+;========================= ROM Disk Control Table ==========================;
+	ORG		DiskControlTable
+;DiskControlTable:
+	DB		DiskReadCode				; Read function
+	DB		00H							; unit number
+	DB		00H							; head number
+	DB		00H							; track number
+	DB		01H							; Starting sector number ()
+	DW		diskSectorSize				; Number of bytes to read ( 1 Sector)
+	DW		TPA							; read into this address
+	DW		DiskStatusLocation			; pointer to next block - no linking
+	DW		DiskControlTable			; pointer to next table- no linking
+
+;=========================== Boot Failure Report ===========================;
+	ORG   DMABuffer
+
+NoDisk:
+	LD		HL,NoDiskMessage			; Load error message
+SendMessage:
+	LD		A,(HL)						; Get character
+	OR		A							; Is it EOM ?
+	RET		Z							;  if yes, exit
+	OUT		(CONSOLE),A					; Send it to the Console
+	INC		HL							; Increment the pointer
+	JR		SendMessage					; Loop for more
+NoDiskMessage:
+	DB		CR,LF
+	DB		'No System Disk Mounted'
+	DB		CR,LF,EOM
+CodeEnd:

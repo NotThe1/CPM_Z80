@@ -46,59 +46,59 @@ WaitForBootComplete:
 	CALL	SendMessage					; Send message
 	HALT								; And STOP!
 
-;---------------------------- Boot Disk Control Block ----------------------;
-BootDiskControlTable:														;
-	DB		DiskReadCode				; Read function						;
-	DB		00H							; unit number						;
-	DB		00H							; head number						;
-	DB		00H							; track number						;
-	DB		0DH							; Starting sector number (13)		;
-	DW		5 * 512						; Number of bytes to read			;
-										;	( 0A00 All of BIOS)				;
-	DW		BIOSStart					; read into this address			;
-	DW		DiskStatusLocation			; next block - no linking			;
-	DW		DiskControlTable			; next table- no linking			;
-;---------------------------- ROM Disk Control Block -----------------------;
-;------------------------------------ Page 0 -------------------------------;
-Page0Image:																	;
-	JP		WarmBootEntry				; warm start						;
-;IOBYTE:																	;
-	DB		IOBYTE_DEFAULT				; IOBYTE-							;
-DefaultDisk:																;
-	DB		00H							; Current default drive (A)			;
-	JP		BDOSEntry					; jump to BDOS entry				;
-	DS		028H						; interrupt locations 1-5 not used	;
-	DS		008H						; interrupt location 6 is reserved	;
-	JP		0000H						; RST 7 used only by DDT & SID		;
-Page0ImageEnd:																;
-;------------------------------------ Page 0 -------------------------------;
+;---------------------------- Boot Disk Control Block ----------------------
+BootDiskControlTable:
+	DB		DiskReadCode				; Read function
+	DB		00H							; unit number
+	DB		00H							; head number
+	DB		00H							; track number
+	DB		0DH							; Starting sector number (13)
+	DW		5 * 512						; Number of bytes to read
+										;	( 0A00 All of BIOS)
+	DW		BIOSStart					; read into this address
+	DW		DiskStatusLocation			; next block - no linking
+	DW		DiskControlTable			; next table- no linking
+;---------------------------- ROM Disk Control Block -----------------------
+;------------------------------------ Page 0 -------------------------------
+Page0Image:
+	JP		WarmBootEntry				; warm start
+;IOBYTE:
+	DB		IOBYTE_DEFAULT				; IOBYTE-
+DefaultDisk:
+	DB		00H							; Current default drive (A)
+	JP		BDOSEntry					; jump to BDOS entry
+	DS		028H						; interrupt locations 1-5 not used
+	DS		008H						; interrupt location 6 is reserved
+	JP		0000H						; RST 7 used only by DDT & SID
+Page0ImageEnd:
+;------------------------------------ Page 0 -------------------------------
 
-;---------------------------------- Messages -------------------------------;
-BootMessage:																;
-	DB		CR,LF															;
-	DB		'BootStrap loader '												;
-	DB		'CP/M 2.2 (Z80) '												;
-	DB		CR,LF															;
-	DB		'Build 1.0.1 '													;
-	DB		CR,LF															;
-	DB		'CCP 1.0.1 |  BDOS 1.0 | BIOS 1.0'								;
-	DB		CR,LF,CR,LF,EOM													;
-																			;
-FailedBootMessage:															;
-	DB		CR,LF															;
-	DB		'Boot Unsuccessful - Check for Disk in A:'						;
-	DB		CR,LF,EOM														;
-																			;
-SendBootMessage:															;
-	LD		HL,BootMessage													;
-																			;
-SendMessage:																;
-	LD		A,(HL)															;
-	OR		A																;
-	RET		Z																;
-	OUT		(CONSOLE),A					; Console address					;
-	INC		HL																;
-	JP		SendMessage														;
-;---------------------------------- Messages -------------------------------;
+;---------------------------------- Messages -------------------------------
+BootMessage:
+	DB		CR,LF
+	DB		'BootStrap loader '
+	DB		'CP/M 2.2 (Z80) '
+	DB		CR,LF
+	DB		'Build 1.0.2 '
+	DB		CR,LF
+	DB		'CCP 1.1.0 |  BDOS 1.0 | BIOS 1.0'
+	DB		CR,LF,CR,LF,EOM
+
+FailedBootMessage:
+	DB		CR,LF
+	DB		'Boot Unsuccessful - Check for Disk in A:'
+	DB		CR,LF,EOM
+
+SendBootMessage:
+	LD		HL,BootMessage
+
+SendMessage:
+	LD		A,(HL)
+	OR		A
+	RET		Z
+	OUT		(CONSOLE),A					; Console address
+	INC		HL
+	JP		SendMessage
+;---------------------------------- Messages -------------------------------
 Z_HighestLocation:
 Z_MemoryLeft			EQU	0512H - Z_HighestLocation

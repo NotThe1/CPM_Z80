@@ -3,6 +3,7 @@
 
 ; CCP.Z80
 ;
+; 2019-12-07 Fixed problem with empty command in CCP [1.2.0]
 ; 2019-12-06 Fixed stack overflow in ccpType post DJNZ [1.1.0]
 ; 2019-04-23 FixedCommand Tail count Error [1.0.1]
 ; 2019-03-03 Fixed UserCommand not putting 'COM' in Token1
@@ -170,6 +171,8 @@ ReadCommand:
 NotSubmitFile:
 	CALL	DeleteSubmitFile			; Delete any submit file
 	CALL	SaveUserAndDisk				; Save User & Disk to page 0
+	XOR		A
+	LD		(commandLength),A			; Zero out command length
 	LD		DE,commandMaxLength			; Point to Start of Buffer
 	LD		C,fReadString				; Load Function Number
 	CALL	BDOS						;  and let BDOS do its work
@@ -178,6 +181,9 @@ NotSubmitFile:
 NoRead:
 ; set the last character to zero for later scans
 	LD		HL,commandLength			; Point to length of command
+	XOR		A
+	CP		(HL)						; Is command length Zero?
+	RET		Z							;  exit if yes	
 	LD		B,(HL)						; Put it into B
 UpCaseLoop:
 	INC		HL							; Point at next byte in buffer

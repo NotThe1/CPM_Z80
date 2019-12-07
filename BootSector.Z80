@@ -79,9 +79,9 @@ BootMessage:
 	DB		'BootStrap loader '
 	DB		'CP/M 2.2 (Z80) '
 	DB		CR,LF
-	DB		'Build 1.0.2 '
+	DB		'Build 1.1.0 '
 	DB		CR,LF
-	DB		'CCP 1.1.0 |  BDOS 1.0 | BIOS 1.0'
+	DB		'CCP 1.2.0 |  BDOS 1.0 | BIOS 1.0'
 	DB		CR,LF,CR,LF,EOM
 
 FailedBootMessage:

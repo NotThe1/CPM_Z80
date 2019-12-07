@@ -5,7 +5,7 @@
 ; 2018-12-28 Version 1.0
 ; 2018-12-28 Changed the READ & WRITE routines
 ; 2018 12-27 Adjusted BOOT & WBOOT
-; 2018-12-10 Refactored	character device routines;
+; 2018-12-10 Refactored	character device routines
 ; 2017-03-31 Added List out functionality for List Device
 ; 2017-03-02 Refactored the CP/M Suite
 ; 2017-02-08 All disk drives are 3.5 DH disks (1.44MB)
@@ -13,7 +13,7 @@
 ; 2014-03-14	:	Frank Martyn
 ; BIOS Function Descriptions are from THE PROGRAMMER'S CP/M® HANDBOOK
 ; by Andy Johnson-Laird
-;
+
 ; Published by
 ; Osborne/McGraw-Hill
 ; 2600 Tenth Street
@@ -66,72 +66,72 @@ WarmBootEntry:
 	JP		SECTRAN						; 10 Sector Translate
 
 
-;===========================================================================;
-;	BOOT:	BIOS 00		Hard Boot/Cold Boot									;
-;																			;
-;	The BOOT jump instruction is the first instruction executed in CP/M. The;
-; bootstrap sequence must transfer control to the BOOT entry point in order ;
-; to	bring up CP/M.														;
-;	This reads in the CP/M loader on the first sector of the physical disk	;
-; drive chosen to be logical disk A. This CP/M loader program reads the		;
-; binary image of the CCP, BOOS, and BIOS into memory at some predetermined ;
-; address. Then it transfers control to the BOOT entry point in the BIOS	;
-; jump vector. This BOOT routine must initialize all of the required		;
-; computer hardware.														;
-;																			;
-;	Most BOOT routines sign on by displaying a short message on the console,;
-; indicating the current version ofCP/M and the computer hardware that this ;
-; BIOS can support. The BOOT routine terminates by transferring control to	;
-; the start of the CCP +6 bytes (the CCP has its own small jump vector at	;
-; the beginning). Just before the BOOT routine jumps into the CCP, it sets	;
-; the C register to 0 to indicate that logical disk A is to be the default	;
-; disk drive. This is what causes "A>" to be the CCP's initial prompt.		;
-;																			;
-;			Entry Point		:	BiosStart + (0 *	3).	(00H)				;
-;			Entry Parameters:	None										;
-;			Exit Parameters :	None										;
-;===========================================================================;
+;===========================================================================
+;	BOOT:	BIOS 00		Hard Boot/Cold Boot
+;
+;	The BOOT jump instruction is the first instruction executed in CP/M. The
+; bootstrap sequence must transfer control to the BOOT entry point in order 
+; to	bring up CP/M.
+;	This reads in the CP/M loader on the first sector of the physical disk
+; drive chosen to be logical disk A. This CP/M loader program reads the
+; binary image of the CCP, BOOS, and BIOS into memory at some predetermined 
+; address. Then it transfers control to the BOOT entry point in the BIOS
+; jump vector. This BOOT routine must initialize all of the required
+; computer hardware.
+;
+;	Most BOOT routines sign on by displaying a short message on the console,
+; indicating the current version ofCP/M and the computer hardware that this 
+; BIOS can support. The BOOT routine terminates by transferring control to
+; the start of the CCP +6 bytes (the CCP has its own small jump vector at
+; the beginning). Just before the BOOT routine jumps into the CCP, it sets
+; the C register to 0 to indicate that logical disk A is to be the default
+; disk drive. This is what causes "A>" to be the CCP's initial prompt.
+;
+;			Entry Point		:	BiosStart + (0 *	3).	(00H)
+;			Entry Parameters:	None
+;			Exit Parameters :	None
+;===========================================================================
 
 BOOT:
 ;CodeStart:
 	LD		HL,ROMControl
 	CALL	ReadRawDisk					; Load the boot sector from the disk
-	JP		NC,TPA						; Now execute the boot loader;
+	JP		NC,TPA						; Now execute the boot loader
 
 	LD		HL,NoDiskMessage			; Else let the user know Disk A does
 	CALL	DisplayMessage				;	not have a system disk in it
 	HALT
 
 
-;===========================================================================;
-;	WBOOT:	BIOS 01		SoftBoot/Warm Boot									;
-;																			;
-;	Unlike the "cold" bootstrap entry point, which executes only once,		;
-; the WBOOT or warm boot routine will be executed every time a program		;
-; terminates by jumping to location OOOOH, or whenever you type a CONTROL-C ;
-; on the console as the first character of an input line.					;
-;	The WBOOT routine is responsible for reloading the CCP into memory.		;
-; Programs often use all of memory up to the starting point of the BDOS,	;
-; overwriting the CCP in the process. The underlying philosophy is that		;
-; while a program is executing, the CCP is not needed, so the program can	;
-; use the memory previously occupied by the CCP. The CCP occupies			;
-; 800H (2048) bytes ofmemory-and this is frequently just enough to make the ;
-; difference between a program that cannot run and one that can.			;
-; A few programs that are self-contained and do not require the BDOS's		;
-; facilities will also overwrite the BDOS to get another 1600H (5632) bytes ;
-; of memory. Therefore, to be really safe, the WBOOT routine should read in ;
-; both the CCP and the BDOS. It also needs to set up the two JMPs at		;
-; location OOOOH (to WBOOT itself) and at location 0005H (to the BOOS).		;
-; Location 0003H should be set to the initial value of the 10BYTE if this	;
-; is implemented in the BIOS. As its last act, the WBOOT routine sets		;
-; register C to indicate which logical disk is to be selected				;
-; (C= 0 for A, I for B, and so on). It then transfers control into the CCP	;
-; at the first instruction in order to restart the CCP.						;
-;																			;
-;			Entry Point		:	BiosStart + (1 *	3).	(003H)				;
-;			Entry Parameters:	None										;
-;			Exit Parameters :	None										;
-;===========================================================================;
+;===========================================================================
+;	WBOOT:	BIOS 01		SoftBoot/Warm Boot
+;
+;	Unlike the "cold" bootstrap entry point, which executes only once,
+; the WBOOT or warm boot routine will be executed every time a program
+; terminates by jumping to location OOOOH, or whenever you type a CONTROL-C 
+; on the console as the first character of an input line.
+;	The WBOOT routine is responsible for reloading the CCP into memory.
+; Programs often use all of memory up to the starting point of the BDOS,
+; overwriting the CCP in the process. The underlying philosophy is that
+; while a program is executing, the CCP is not needed, so the program can
+; use the memory previously occupied by the CCP. The CCP occupies
+; 800H (2048) bytes ofmemory-and this is frequently just enough to make the 
+; difference between a program that cannot run and one that can.
+; A few programs that are self-contained and do not require the BDOS's
+; facilities will also overwrite the BDOS to get another 1600H (5632) bytes 
+; of memory. Therefore, to be really safe, the WBOOT routine should read in 
+; both the CCP and the BDOS. It also needs to set up the two JMPs at
+; location OOOOH (to WBOOT itself) and at location 0005H (to the BOOS).
+; Location 0003H should be set to the initial value of the 10BYTE if this
+; is implemented in the BIOS. As its last act, the WBOOT routine sets
+; register C to indicate which logical disk is to be selected
+; (C= 0 for A, I for B, and so on). It then transfers control into the CCP
+; at the first instruction in order to restart the CCP.
+;
+;			Entry Point		:	BiosStart + (1 *	3).	(003H)
+;			Entry Parameters:	None
+;			Exit Parameters :	None
+;===========================================================================
 
 WBOOT:
 	LD		SP,CCPEntry-1				; Put stack at top of User area
@@ -168,95 +168,95 @@ LoadPage0:
 
 
 ;============================================================================
-;---------------------------- Raw Disk Code --------------------------------;
-;	Enter with DiskControlBlock pointer in HL								;
-ReadRawDisk:																;
-	LD		(DiskCommandBlock),HL		; Put it into the DCB in page 0		;
-																			;
-	LD		HL,DiskControlByte												;
-	LD		(HL),080H					; Activate the controller			;
-																			;
-WaitForBootComplete:														;
-	LD		A,(HL)						; Get the control byte				;
-	OR		A							; Is it completed					;
-	JR	NZ,WaitForBootComplete			; If not try again					;
-																			;
-	LD		A,(DiskStatusLocation)		; What's the status?				;
-	CP		080H						; Any errors ?						;
-	RET									; Exit with result in the CCs		;
-																			;
-;---------------------------- Raw Disk Code --------------------------------;
+;---------------------------- Raw Disk Code --------------------------------
+;	Enter with DiskControlBlock pointer in HL
+ReadRawDisk:
+	LD		(DiskCommandBlock),HL		; Put it into the DCB in page 0
 
-;---------------------------- Raw Message Code -----------------------------;
-DisplayMessage:																;
-	LD		A,(HL)															;
-	OR		A																;
-	RET	Z																	;
-	OUT		(BOOT_CON_ADDRESS),A		; Console address					;
-	INC		HL																;
-	JR		DisplayMessage													;
-																			;
-NoDiskMessage:																;
-	DB		CR,LF															;
-	DB		'No System Disk Mounted'										;
-	DB		CR,LF,EndOfMessage												;
-																			;
-WarmBootErroMessage:														;
-	DB		CR,LF															;
-	DB		'Warm Boot -'													;
-	DB		' Retrying.'													;
-	DB		CR,LF,EndOfMessage												;
-;---------------------------- Raw Message Code -----------------------------;
-;---------------------------- WBOOT Disk Control Block ---------------------;
-WBOOTControl:																;
-	DB		DiskReadCode				; Read function						;
-	DB		00H							; unit number						;
-	DB		00H							; head number						;
-	DB		00H							; track number						;
-	DB		02H							; Starting sector number			;
-										;	(skip cold boot sector)			;
-	DW		CCPLength + BDOSLength		; Number of bytes to read			;
-										;	( rest of the head)				;
-	DW		CCPEntry					; read into this address			;
-	DW		DiskStatusLocation			; pointer to next block - no linking;
-	DW		DiskControlByte				; pointer to next table- no linking ;
-;---------------------------- WBOOT Disk Control Block ---------------------;
-;---------------------------- ROM Disk Control Block -----------------------;
-ROMControl:																	;
-	DB		DiskReadCode				; Read function						;
-	DB		00H							; unit number						;
-	DB		00H							; head number						;
-	DB		00H							; track number						;
-	DB		01H							; Starting sector number ()			;
-	DW		diskSectorSize				; Number of bytes to read (1 Sector);
-	DW		TPA							; read into this address			;
-	DW		DiskStatusLocation			; pointer to next block - no linking;
-	DW		DiskControlTable			; pointer to next table- no linking ;
-;---------------------------- ROM Disk Control Block -----------------------;
+	LD		HL,DiskControlByte
+	LD		(HL),080H					; Activate the controller
+
+WaitForBootComplete:
+	LD		A,(HL)						; Get the control byte
+	OR		A							; Is it completed
+	JR	NZ,WaitForBootComplete			; If not try again
+
+	LD		A,(DiskStatusLocation)		; What's the status?
+	CP		080H						; Any errors ?
+	RET									; Exit with result in the CCs
+
+;---------------------------- Raw Disk Code --------------------------------
+
+;---------------------------- Raw Message Code -----------------------------
+DisplayMessage:
+	LD		A,(HL)
+	OR		A
+	RET	Z
+	OUT		(BOOT_CON_ADDRESS),A		; Console address
+	INC		HL
+	JR		DisplayMessage
+
+NoDiskMessage:
+	DB		CR,LF
+	DB		'No System Disk Mounted'
+	DB		CR,LF,EndOfMessage
+
+WarmBootErroMessage:
+	DB		CR,LF
+	DB		'Warm Boot -'
+	DB		' Retrying.'
+	DB		CR,LF,EndOfMessage
+;---------------------------- Raw Message Code -----------------------------
+;---------------------------- WBOOT Disk Control Block ---------------------
+WBOOTControl:
+	DB		DiskReadCode				; Read function
+	DB		00H							; unit number
+	DB		00H							; head number
+	DB		00H							; track number
+	DB		02H							; Starting sector number
+										;	(skip cold boot sector)
+	DW		CCPLength + BDOSLength		; Number of bytes to read
+										;	( rest of the head)
+	DW		CCPEntry					; read into this address
+	DW		DiskStatusLocation			; pointer to next block - no linking
+	DW		DiskControlByte				; pointer to next table- no linking 
+;---------------------------- WBOOT Disk Control Block ---------------------
+;---------------------------- ROM Disk Control Block -----------------------
+ROMControl:
+	DB		DiskReadCode				; Read function
+	DB		00H							; unit number
+	DB		00H							; head number
+	DB		00H							; track number
+	DB		01H							; Starting sector number ()
+	DW		diskSectorSize				; Number of bytes to read (1 Sector)
+	DW		TPA							; read into this address
+	DW		DiskStatusLocation			; pointer to next block - no linking
+	DW		DiskControlTable			; pointer to next table- no linking 
+;---------------------------- ROM Disk Control Block -----------------------
 
 ;============================================================================
 
 
-;===========================================================================;
-;	Console Status:		BIOS 02												;
-;																			;
-;	CONST simply returns an indicator showing whether there is an incoming	;
-; character from the console device. The convention is that A = OFFH if a	;
-; character is waiting to be processed, A = 0 if one is not. Note that the	;
-; zero flag need not be set to reflect the contents of the A register		;
-; it is the contents that are important. CONST is called by the CCP whenever;
-; the CCP is in the middle of an operation that can be interrupted by		;
-; pressing a keyboard character.											;
-;																			;
-;	The BDOS will call CONST if a program makes a Read Console Status		;
-; function call (CONST, code 11, OBH). It is also called by the console		;
-; input BIOS routine, CONIN													;
-;																			;
-;			Entry Point		:	BiosStart + (2 *	3).	(006H)				;
-;			Entry Parameters:	None										;
-;			Exit Parameters :	A = 0FFH if there is a character waiting	;
-;								A = 00H	if one is not						;
-;===========================================================================;
+;===========================================================================
+;	Console Status:		BIOS 02
+;
+;	CONST simply returns an indicator showing whether there is an incoming
+; character from the console device. The convention is that A = OFFH if a
+; character is waiting to be processed, A = 0 if one is not. Note that the
+; zero flag need not be set to reflect the contents of the A register
+; it is the contents that are important. CONST is called by the CCP whenever
+; the CCP is in the middle of an operation that can be interrupted by
+; pressing a keyboard character.
+;
+;	The BDOS will call CONST if a program makes a Read Console Status
+; function call (CONST, code 11, OBH). It is also called by the console
+; input BIOS routine, CONIN
+;
+;			Entry Point		:	BiosStart + (2 *	3).	(006H)
+;			Entry Parameters:	None
+;			Exit Parameters :	A = 0FFH if there is a character waiting
+;								A = 00H	if one is not
+;===========================================================================
 
 CONST:
 ConStatus:
@@ -271,23 +271,23 @@ GenericInStatus:						; Entry point for generic input status
 	LD		A,0FFH
 	RET									; OFFH => Data in Buffer
 
-;===========================================================================;
-;	Console In:		BIOS 03													;
-;																			;
-;	CONIN reads the next character from the console to the A register and	;
-; sets; the most significant (parity) bit to O. Normally, CONIN will call	;
-; the CONST routine until it detects A = OFFH. Only then will it input the	;
-; data character and mask off the parity bit. CONIN is called by the CCP	;
-; and by the BDOS when a program executes a Read Console Byte function		;
-; (CONIN, code 1). Normally this follows a call to CONST					;
-; ( a blocking call) to indicates a char is ready.							;
-;																			;
-; This is a blocking routine												;
-;																			;
-;			Entry Point		:	BiosStart + (3 *	3).	(009H)				;
-;			Entry Parameters:	None										;
-;			Exit Parameters :	A = ASCII character read from console		;
-;===========================================================================;
+;===========================================================================
+;	Console In:		BIOS 03
+;
+;	CONIN reads the next character from the console to the A register and
+; sets; the most significant (parity) bit to O. Normally, CONIN will call
+; the CONST routine until it detects A = OFFH. Only then will it input the
+; data character and mask off the parity bit. CONIN is called by the CCP
+; and by the BDOS when a program executes a Read Console Byte function
+; (CONIN, code 1). Normally this follows a call to CONST
+; ( a blocking call) to indicates a char is ready.
+;
+; This is a blocking routine
+;
+;			Entry Point		:	BiosStart + (3 *	3).	(009H)
+;			Entry Parameters:	None
+;			Exit Parameters :	A = ASCII character read from console
+;===========================================================================
 
 CONIN:
 ConIn:
@@ -297,22 +297,22 @@ ConIn:
 	LD		L,(IX + DataReadIndex)
 	LD		H,(IX +(DataReadIndex +1 ))
 	JP		(HL)
-;===========================================================================;
-;	Console Out:		BIOS 04												;
-;																			;
-;	CONOUT outputs the character (in ASCII) in register C to the console. The;
-; most significant (parity) bit of the character will always be O.			;
-; CONOUT must first check that the console device is ready to receive more	;
-; data, delaying if necessary until it is, and only then sending the		;
-; character to the device. CONOUT is called by the CCP and by the BDOS when ;
-; a program executes a Write Console Byte function (CONOUT, code 2).		;
-;																			;
-; This is a blocking routine												;
-;																			;
-;			Entry Point		:	BiosStart + (4 *	3).	(00CH)				;
-;			Entry Parameters:	C = ASCII character to be sent to Console	;
-;			Exit Parameters :	None										;
-;===========================================================================;
+;===========================================================================
+;	Console Out:		BIOS 04
+;
+;	CONOUT outputs the character (in ASCII) in register C to the console. The
+; most significant (parity) bit of the character will always be O.
+; CONOUT must first check that the console device is ready to receive more
+; data, delaying if necessary until it is, and only then sending the
+; character to the device. CONOUT is called by the CCP and by the BDOS when 
+; a program executes a Write Console Byte function (CONOUT, code 2).
+;
+; This is a blocking routine
+;
+;			Entry Point		:	BiosStart + (4 *	3).	(00CH)
+;			Entry Parameters:	C = ASCII character to be sent to Console
+;			Exit Parameters :	None
+;===========================================================================
 
 CONOUT:
 CONOut:
@@ -329,22 +329,22 @@ GenericOutStatus1:
 	LD		H,(IX +(DataWriteIndex + 1))
 	JP		(HL)
 
-;===========================================================================;
-;	List output	BIOS 05														;
-;																			;
-;	LIST is similar to CONOUT except that it sends the character in register;
-; C to the list device. It too checks first that the list device is ready to;
-; receive the character. LIST is called by the CCP in response to the		;
-; CONTROL-P toggle for printer echo of console output, and by the BDOS when	;
-; a program makes a Write Printer Byte or Display String call				;
-; (LISTOUT and PRINTS, codes 5 and 9).										;
-;																			;
-; This is a blocking routine												;
-;																			;
-;			Entry Point		:	BiosStart + (5 *	3.)	(00FH)				;
-;			Entry Parameters:	C = ASCII char to be sent to List Device	;
-;			Exit Parameters :	None										;
-;===========================================================================;
+;===========================================================================
+;	List output	BIOS 05
+;
+;	LIST is similar to CONOUT except that it sends the character in register
+; C to the list device. It too checks first that the list device is ready to
+; receive the character. LIST is called by the CCP in response to the
+; CONTROL-P toggle for printer echo of console output, and by the BDOS when
+; a program makes a Write Printer Byte or Display String call
+; (LISTOUT and PRINTS, codes 5 and 9).
+;
+; This is a blocking routine
+;
+;			Entry Point		:	BiosStart + (5 *	3.)	(00FH)
+;			Entry Parameters:	C = ASCII char to be sent to List Device
+;			Exit Parameters :	None
+;===========================================================================
 
 LIST:
 	LD		A,(IOBYTE)
@@ -353,31 +353,31 @@ LIST:
 	LD		IX,LST_Vector
 	JR		GenericOutStatus			; go to generic blocking out routine
 
-;===========================================================================;
-;	Punch output	BIOS 06													;
-;																			;
-;	PUNCH sends the character in register C to the "punch" device. As		;
-; mentioned earlier, the "punch" is rarely a real paper tape punch.			;
-; In most BIOS's, the PUNCH entry point either returns immediately and is	;
-; effectively a null routine, or it outputs the character to a				;
-; communications device, such as a; modem, on your computer. PUNCH must		;
-; check that the "punch" device is indeed ready to accept another character ;
-; for output, and must wait if it is not.									;
-;																			;
-;	Digital Research's documentation states that the character to be output	;
-; will always have its most significant bit set to O. This is not true.		;
-; The BDOS simply transfers control over to the PUNCH entry point in the	;
-; BIOS the setting of the most significant bit will be determined by the	;
-; program making the BDOS function request (PUNOUT, code 4). This is		;
-; important because the requirement of a zero would preclude being able to	;
-; send pure	binary data via the BIOS PUNCH function							;
-;																			;
-; This is a blocking routine												;
-;																			;
-;			Entry Point		:	BiosStart + (6 *	3).	(012H)				;
-;			Entry Parameters:	C = ASCII char to be sent toPunch Device	;
-;			Exit Parameters :	None										;
-;===========================================================================;
+;===========================================================================
+;	Punch output	BIOS 06
+;
+;	PUNCH sends the character in register C to the "punch" device. As
+; mentioned earlier, the "punch" is rarely a real paper tape punch.
+; In most BIOS's, the PUNCH entry point either returns immediately and is
+; effectively a null routine, or it outputs the character to a
+; communications device, such as a; modem, on your computer. PUNCH must
+; check that the "punch" device is indeed ready to accept another character 
+; for output, and must wait if it is not.
+;
+;	Digital Research's documentation states that the character to be output
+; will always have its most significant bit set to O. This is not true.
+; The BDOS simply transfers control over to the PUNCH entry point in the
+; BIOS the setting of the most significant bit will be determined by the
+; program making the BDOS function request (PUNOUT, code 4). This is
+; important because the requirement of a zero would preclude being able to
+; send pure	binary data via the BIOS PUNCH function
+;
+; This is a blocking routine
+;
+;			Entry Point		:	BiosStart + (6 *	3).	(012H)
+;			Entry Parameters:	C = ASCII char to be sent toPunch Device
+;			Exit Parameters :	None
+;===========================================================================
 
 PUNCH:				; Punch output
 	LD		A,(IOBYTE)
@@ -388,27 +388,27 @@ PUNCH:				; Punch output
 	LD		IX,PUN_Vector
 	JR		GenericOutStatus			; go to generic blocking out routine
 
-;===========================================================================;
-;	Reader input	BIOS 07													;
-;																			;
-;	As with the PUNCH entry point, the READER entry point rarely connects to;
-; a real paper tape reader.													;
-; The READER function must return the next character from the reader device ;
-; in the A register, waiting, if need be, until there is a character.		;
-;																			;
-;	Digital Research's documentation again says that the most significant bit;
-; of the A register must be 0, but this is not the case if you wish to		;
-; receive pure binary information via this function.						;
-;																			;
-;	READER is called whenever a program makes a Read "Reader" Byte function	;
-; request (READIN, code 3).													;
-;																			;
-; This is a blocking routine												;
-;																			;
-;			Entry Point		:	BiosStart + (7 *	3).	(015H)				;
-;			Entry Parameters:	None										;
-;			Exit Parameters :	A = ASCII character read from Reader Device	;
-;===========================================================================;
+;===========================================================================
+;	Reader input	BIOS 07
+;
+;	As with the PUNCH entry point, the READER entry point rarely connects to
+; a real paper tape reader.
+; The READER function must return the next character from the reader device 
+; in the A register, waiting, if need be, until there is a character.
+;
+;	Digital Research's documentation again says that the most significant bit
+; of the A register must be 0, but this is not the case if you wish to
+; receive pure binary information via this function.
+;
+;	READER is called whenever a program makes a Read "Reader" Byte function
+; request (READIN, code 3).
+;
+; This is a blocking routine
+;
+;			Entry Point		:	BiosStart + (7 *	3).	(015H)
+;			Entry Parameters:	None
+;			Exit Parameters :	A = ASCII character read from Reader Device
+;===========================================================================
 
 READER:				; Reader Input
 	LD		A,(IOBYTE)
@@ -423,36 +423,36 @@ READER1:
 	LD		H,(IX +(DataReadIndex +1 ))
 	JP		(HL)
 
-;===========================================================================;
-;	List Status:	BIOS 0F													;
-;																			;
-;	LISTST was added when CP/M was upgraded from version 1.4 to version 2.0.;
-; This function returns the current status of the list device, using the	;
-; IOBYTE if necessary to select the correct physical device. It sets the A	;
-; register to OFFH if the list device can accept another character for		;
-; output or to OOH if it is not ready. Digital Research's documentation		;
-; states that this function is used by the DESPOOL utility program (which	;
-; allows you to print a file "simultaneously" with other operations) to		;
-; improve console response during its operation, and that it is acceptable	;
-; for the routine always to return OOH if you choose not to implement it	;
-; fully. Unfortunately, this statement is wrong. Many other programs use	;
-; the LISTST function to "poll" the list device to make sure it is ready,	;
-; and if it fails to come ready after a predetermined time, to output a		;
-; message to the console; indicating that the printer is not ready. If you	;
-; ever make a call to the BDOS list output functions, Write Printer Byte	;
-; and Print String (codes 5 and 9), and the printer is not ready,			;
-; then CP/M will wait forever-and your program will have lost control so	;
-; it cannot even detect that the problem has occurred. If LISTST always		;
-; returns a OOH, then the printer will always appear not to be ready.		;
-; Not only does this make nonsense out of the LISTST function, but it also	;
-; causes a stream of false "Printer not Ready" error messages to appear		;
-; on the console.															;
-;																			;
-;			Entry Point		:	BiosStart + (F *	3).	(02DH)				;
-;			Entry Parameters:	None										;
-;			Exit Parameters :	A = 0FFH if List Device is ready			;
-;								A = 00H	if List Device is	not ready		;
-;===========================================================================;
+;===========================================================================
+;	List Status:	BIOS 0F
+;
+;	LISTST was added when CP/M was upgraded from version 1.4 to version 2.0.
+; This function returns the current status of the list device, using the
+; IOBYTE if necessary to select the correct physical device. It sets the A
+; register to OFFH if the list device can accept another character for
+; output or to OOH if it is not ready. Digital Research's documentation
+; states that this function is used by the DESPOOL utility program (which
+; allows you to print a file "simultaneously" with other operations) to
+; improve console response during its operation, and that it is acceptable
+; for the routine always to return OOH if you choose not to implement it
+; fully. Unfortunately, this statement is wrong. Many other programs use
+; the LISTST function to "poll" the list device to make sure it is ready,
+; and if it fails to come ready after a predetermined time, to output a
+; message to the console; indicating that the printer is not ready. If you
+; ever make a call to the BDOS list output functions, Write Printer Byte
+; and Print String (codes 5 and 9), and the printer is not ready,
+; then CP/M will wait forever-and your program will have lost control so
+; it cannot even detect that the problem has occurred. If LISTST always
+; returns a OOH, then the printer will always appear not to be ready.
+; Not only does this make nonsense out of the LISTST function, but it also
+; causes a stream of false "Printer not Ready" error messages to appear
+; on the console.
+;
+;			Entry Point		:	BiosStart + (F *	3).	(02DH)
+;			Entry Parameters:	None
+;			Exit Parameters :	A = 0FFH if List Device is ready
+;								A = 00H	if List Device is	not ready
+;===========================================================================
 
 LISTST:
 	LD		A,(IOBYTE)					; Get Physical device
@@ -526,9 +526,9 @@ DUMMYCheck:
 	OR		A							; Set flags
 	RET
 
-;===========================================================================;
+;===========================================================================
 SetDeviceVector:
-	AND		03H							; Get bits 0 & 1;
+	AND		03H							; Get bits 0 & 1
 	ADD		A,A							; Double for word size index
 	LD		D,00H
 	LD		E,A							; load byte index int DE
@@ -650,54 +650,54 @@ LST_Vector:								; IOBYTE bits 7 & 6
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-;===========================================================================;
-;							Disk routines									;
-;===========================================================================;
-;																			;
-;	All of the disk functions that follow were originally designed to operate;
-; on the 128-byte sectors used on single-sided, single-density, 8-inch		;
-; floppy diskettes that were standard in the industry at the time.			;
-; Now that CP/M runs on many different types of disks, some of the BIOS		;
-; disk functions seem strange because most of the new disk drives use		;
-; sector sizes other than 128 bytes. To handle larger sector sizes,			;
-; the BIOS has some additional code that makes the BDOS respond as if it	;
-; were still handling 128-byte sectors. This code is referred to as the		;
-; blocking/deblocking code.	As its name implies, it blocks together			;
-; several 128-byte "sectors" and only writes to the disk when a complete	;
-; physical sector has been assembled.	When reading, it reads in a physical;
-; sector and then de-blocks it,handing back several 128-byte "sectors"		;
-; to the BDOS.																;
-;	To do all of this, the blocking/deblocking code uses a special buffer	;
-; area; of the same size as the physical sectors on the disk. This is known ;
-; as the host disk buffer or HSTBUE Physical sectors are read into this		;
-; buffer and written to the disk from it. In order to optimize this			;
-; blocking/deblocking ; routine, the BIOS has code in it to reduce the		;
-; number of times that an; actual disk read or write occurs. A side effect	;
-; is that at any given	moment, several 128-byte "sectors" may be stored	;
-; in the HSTBUF, waiting to be written out to the disk when HSTBUF becomes	;
-; full. This sometimes complicates the logic of the BIOS disk functions.	;
-; You cannot simply select a new disk drive, for example, when the HSTBUF	;
-; contains data destined for another disk drive. You will see this			;
-; complication in the BIOS only in the form of added logical operations the ;
-; BIOS disk functions rarely trigger immediate physical operations.			;
-; It is easier to understand these BIOS functions if you consider that they ;
-; make requests-and that these requests are satisfied only when it makes	;
-; sense to do so, taking into account the blocking/ deblocking logic.		;
-;===========================================================================;
-;===========================================================================;
+;===========================================================================
+;							Disk routines
+;===========================================================================
+;
+;	All of the disk functions that follow were originally designed to operate
+; on the 128-byte sectors used on single-sided, single-density, 8-inch
+; floppy diskettes that were standard in the industry at the time.
+; Now that CP/M runs on many different types of disks, some of the BIOS
+; disk functions seem strange because most of the new disk drives use
+; sector sizes other than 128 bytes. To handle larger sector sizes,
+; the BIOS has some additional code that makes the BDOS respond as if it
+; were still handling 128-byte sectors. This code is referred to as the
+; blocking/deblocking code.	As its name implies, it blocks together
+; several 128-byte "sectors" and only writes to the disk when a complete
+; physical sector has been assembled.	When reading, it reads in a physical
+; sector and then de-blocks it,handing back several 128-byte "sectors"
+; to the BDOS.
+;	To do all of this, the blocking/deblocking code uses a special buffer
+; area; of the same size as the physical sectors on the disk. This is known 
+; as the host disk buffer or HSTBUE Physical sectors are read into this
+; buffer and written to the disk from it. In order to optimize this
+; blocking/deblocking ; routine, the BIOS has code in it to reduce the
+; number of times that an; actual disk read or write occurs. A side effect
+; is that at any given	moment, several 128-byte "sectors" may be stored
+; in the HSTBUF, waiting to be written out to the disk when HSTBUF becomes
+; full. This sometimes complicates the logic of the BIOS disk functions.
+; You cannot simply select a new disk drive, for example, when the HSTBUF
+; contains data destined for another disk drive. You will see this
+; complication in the BIOS only in the form of added logical operations the 
+; BIOS disk functions rarely trigger immediate physical operations.
+; It is easier to understand these BIOS functions if you consider that they 
+; make requests-and that these requests are satisfied only when it makes
+; sense to do so, taking into account the blocking/ deblocking logic.
+;===========================================================================
+;===========================================================================
 
-;===========================================================================;
-;	Home Disk	BIOS 08														;
-;																			;
-;	HOME - Home the selected logical disk to track 0. Before doing this, a	;
-; check must be made to see if the physical disk buffer has information that;
-; must be written out. This is indicated by a flag, DirtyBufferFlag,set in	;
-; the de-blocking code														;
-;																			;
-;			Entry Point		:	BiosStart + (8 *	3).	(18H)				;
-;			Entry Parameters:	None										;
-;			Exit Parameters :	None										;
-;===========================================================================;
+;===========================================================================
+;	Home Disk	BIOS 08
+;
+;	HOME - Home the selected logical disk to track 0. Before doing this, a
+; check must be made to see if the physical disk buffer has information that
+; must be written out. This is indicated by a flag, DirtyBufferFlag,set in
+; the de-blocking code
+;
+;			Entry Point		:	BiosStart + (8 *	3).	(18H)
+;			Entry Parameters:	None
+;			Exit Parameters :	None
+;===========================================================================
 
 HOME:
 	LD		A,(DirtyBufferFlag)			; Check for Dirty Buffer
@@ -710,30 +710,30 @@ Home1:
 	CALL	SETTRK						; no, physical, only logical
 	RET
 
-;===========================================================================;
-;	Select Disk	BIOS 09														;
-;																			;
-;	SELDSK does not do what its name implies. It does not (and must not)	;
-;	physically select a logical disk. Instead, it returns a pointer in the HL;
-;	register pair to the disk parameter header for the logical disk specified;
-;	in register C on entry. C=0 for drive A, 1for drive B, and so on. SELDSK ;
-;	also stores this code for the requested disk to be used later in the READ;
-;	and WRITE functions. If the logical disk code in register C refers to a	;
-;	nonexistent disk or to one for which no disk parameter header exists,	;
-; then SELDSK must return with HL set to OOOOH. Then the BDOS will output a ;
-;	message of the form "BDOS Err on XI Select" Note that SELDSK not only	;
-; does not select the disk, but also does not indicate whether or not the	;
-;	requested disk is physically present -merely whether or not there are	;
-; disk tables present for the disk.											;
-;																			;
-;	SELDSK is called by the BDOS either during disk file operations or by a	;
-; program issuing a Select Disk request (SELDSK, code 14).					;
-;																			;
-;			Entry Point		:	BiosStart + (9 *	3).	(1BH)				;
-;			Entry Parameters:	C = Drive to select (0=A,1=B...)			;
-;			Exit Parameters :	HL = Pointer to Disk Parameter Header		;
-;								HL = 0000H if no disk found					;
-;===========================================================================;
+;===========================================================================
+;	Select Disk	BIOS 09
+;
+;	SELDSK does not do what its name implies. It does not (and must not)
+;	physically select a logical disk. Instead, it returns a pointer in the HL
+;	register pair to the disk parameter header for the logical disk specified
+;	in register C on entry. C=0 for drive A, 1for drive B, and so on. SELDSK 
+;	also stores this code for the requested disk to be used later in the READ
+;	and WRITE functions. If the logical disk code in register C refers to a
+;	nonexistent disk or to one for which no disk parameter header exists,
+; then SELDSK must return with HL set to OOOOH. Then the BDOS will output a 
+;	message of the form "BDOS Err on XI Select" Note that SELDSK not only
+; does not select the disk, but also does not indicate whether or not the
+;	requested disk is physically present -merely whether or not there are
+; disk tables present for the disk.
+;
+;	SELDSK is called by the BDOS either during disk file operations or by a
+; program issuing a Select Disk request (SELDSK, code 14).
+;
+;			Entry Point		:	BiosStart + (9 *	3).	(1BH)
+;			Entry Parameters:	C = Drive to select (0=A,1=B...)
+;			Exit Parameters :	HL = Pointer to Disk Parameter Header
+;								HL = 0000H if no disk found
+;===========================================================================
 
 SELDSK:
 	LD		HL,00H						; Assume an error
@@ -766,22 +766,22 @@ SELDSK:
 
 
 
-;===========================================================================;
-;	Set Track	BIOS 0A														;
-;																			;
-;	SETTRK saves the requested disk track that is in the BC register pair	;
-; when SETTRK gets control. Note that this is an absolute track number		;
-; that is the number of reserved tracks before the file directory will have ;
-; been added to the track number relative to the start of the logical disk. ;
-; The number of the requested track will be used in the next BIOS READ or	;
-; WRITE function. SETTRK is called by the BDOS when it needs to read or		;
-; write a 128-byte sector. Legitimate track numbers are from				;
-; 0 to OFFFFH (65,535).														;
-;																			;
-;			Entry Point		:	BiosStart + (A *	3).	(1EH)				;
-;			Entry Parameters:	BC = Absolute Track Number					;
-;			Exit Parameters :	None										;
-;===========================================================================;
+;===========================================================================
+;	Set Track	BIOS 0A
+;
+;	SETTRK saves the requested disk track that is in the BC register pair
+; when SETTRK gets control. Note that this is an absolute track number
+; that is the number of reserved tracks before the file directory will have 
+; been added to the track number relative to the start of the logical disk. 
+; The number of the requested track will be used in the next BIOS READ or
+; WRITE function. SETTRK is called by the BDOS when it needs to read or
+; write a 128-byte sector. Legitimate track numbers are from
+; 0 to OFFFFH (65,535).
+;
+;			Entry Point		:	BiosStart + (A *	3).	(1EH)
+;			Entry Parameters:	BC = Absolute Track Number
+;			Exit Parameters :	None
+;===========================================================================
 
 SETTRK:
 ;	LD		H,B							; select track in BC on entry
@@ -790,116 +790,116 @@ SETTRK:
 	LD	(SelectedTrack),BC				; save for low level driver
 	RET
 
-;===========================================================================;
-;	Set Sector	BIOS 0B	(Set Record)										;
-;																			;
-; Sector	= Record for disk with 128 byte sectors							;
-;																			;
-;	Sector contains 4 records for disks with 512 byte sectors this routine is;
-; missed named it should be called Set Record								;
-;																			;
-;	SETSEC is similar to SETTRK in that it stores the requested Record		;
-; (sector) number for later use in BIOS READ or WRITE functions. The		;
-; requested Record (sector) number is handed to SETSEC in the A register	;
-; legitimate values are from 0 to OFFH (255). The Record (sector) number	;
-; is a logical Record (sector) number. It does not take into account any	;
-; sector skewing that might be used to improve disk performance. SETSEC		;
-; is called by the BDOS when it needs to read or write a 128-byte			;
-; Record (sector).															;
-;																			;
-;			Entry Point		:	BiosStart + (B *	3).	(21H)				;
-;			Entry Parameters:	A = Logical Sector Number					;
-;			Exit Parameters :	None										;
-;===========================================================================;
+;===========================================================================
+;	Set Sector	BIOS 0B	(Set Record)
+;
+; Sector	= Record for disk with 128 byte sectors
+;
+;	Sector contains 4 records for disks with 512 byte sectors this routine is
+; missed named it should be called Set Record
+;
+;	SETSEC is similar to SETTRK in that it stores the requested Record
+; (sector) number for later use in BIOS READ or WRITE functions. The
+; requested Record (sector) number is handed to SETSEC in the A register
+; legitimate values are from 0 to OFFH (255). The Record (sector) number
+; is a logical Record (sector) number. It does not take into account any
+; sector skewing that might be used to improve disk performance. SETSEC
+; is called by the BDOS when it needs to read or write a 128-byte
+; Record (sector).
+;
+;			Entry Point		:	BiosStart + (B *	3).	(21H)
+;			Entry Parameters:	A = Logical Sector Number
+;			Exit Parameters :	None
+;===========================================================================
 
 SETSEC:						; SETRECORD
 	LD		A,C
 	LD		(SelectedRecord),A			; save for low level driver
 	RET
 
-;===========================================================================;
-;	Set DMA		BIOS 0C														;
-;																			;
-;	SETDMA saves the address in the BC register pair in the requested DMA	;
-; address. The next BIOS READ or WRITE function will use the DMA address as ;
-; a pointer to the 128-byte sector buffer into which data will be read or	;
-; from which data will be written.											;
-;	The default DMA address is 0080H. SETDMA is called by the BDOS when it	;
-; needs to READ or WRITE a 128-byte sector.									;
-;																			;
-;			Entry Point		:	BiosStart + (C *	3).	(24H)				;
-;			Entry Parameters:	BC = DMA address							;
-;			Exit Parameters :	None										;
-;===========================================================================;
+;===========================================================================
+;	Set DMA		BIOS 0C
+;
+;	SETDMA saves the address in the BC register pair in the requested DMA
+; address. The next BIOS READ or WRITE function will use the DMA address as 
+; a pointer to the 128-byte sector buffer into which data will be read or
+; from which data will be written.
+;	The default DMA address is 0080H. SETDMA is called by the BDOS when it
+; needs to READ or WRITE a 128-byte sector.
+;
+;			Entry Point		:	BiosStart + (C *	3).	(24H)
+;			Entry Parameters:	BC = DMA address
+;			Exit Parameters :	None
+;===========================================================================
 
 SETDMA:
 	LD	(DMAAddress),BC					; save for low level driver
 	RET
 
-;===========================================================================;
-;	Sector Translate	BIOS 10												;
-;																			;
-;	SECTRAN, given a logical sector number, locates the correct physical	;
-;	sector number in the sector translate table for the previously selected	;
-;	(via SELDSK) logical disk drive. Note that both logical and physical	;
-;	sector numbers are l28-byte sectors, so if you are working with a hard	;
-;	disk system, it is not too efficient to impose a sector interlace at the;
-;	l28-byte sector level. It is better to impose the sector interlace right;
-;	inside the hard disk driver, if at all. In general, hard disks spin so	;
-;	rapidly that CP/M simply cannot take advantage of sector interlace.		;
-;	The BDOS hands over the logical sector number in the BC register pair,	;
-;	with the address of the sector translate table in the DE register pair.	;
-;	SECTRAN must return the physical sector number in HL. If SECTRAN is to be;
-;	a null routine, it must move the contents of BC to HL and return.		;
-;																			;
-;			Entry Point		:	BiosStart + (10 *	3).	(30H)				;
-;			Entry Parameters:	BC = Original Sector						;
-;			Exit Parameters :	DE = Translated Sector						;
-;===========================================================================;
+;===========================================================================
+;	Sector Translate	BIOS 10
+;
+;	SECTRAN, given a logical sector number, locates the correct physical
+;	sector number in the sector translate table for the previously selected
+;	(via SELDSK) logical disk drive. Note that both logical and physical
+;	sector numbers are l28-byte sectors, so if you are working with a hard
+;	disk system, it is not too efficient to impose a sector interlace at the
+;	l28-byte sector level. It is better to impose the sector interlace right
+;	inside the hard disk driver, if at all. In general, hard disks spin so
+;	rapidly that CP/M simply cannot take advantage of sector interlace.
+;	The BDOS hands over the logical sector number in the BC register pair,
+;	with the address of the sector translate table in the DE register pair.
+;	SECTRAN must return the physical sector number in HL. If SECTRAN is to be
+;	a null routine, it must move the contents of BC to HL and return.
+;
+;			Entry Point		:	BiosStart + (10 *	3).	(30H)
+;			Entry Parameters:	BC = Original Sector
+;			Exit Parameters :	DE = Translated Sector
+;===========================================================================
 SECTRAN:
 	PUSH	BC
 	POP		HL							; just move the value from BC to HL
 	RET
 
-;===========================================================================;
-;	READ			BIOS 0D													;
-;																			;
-;	READ reads in a 128-byte sector provided that there have been previous	;
-; BIOS function calls to:													;
-;				- SELDSK	"select" the disk								;
-;				- SETDMA	set the DMA address								;
-;				- SETTRK	set the track number							;
-;				- SETSEC	set the sector number.							;
-;																			;
-;	Because of the blocking/ deblocking code in the BIOS, there are frequent;
-; occasions when the requested sector will already be in the host buffer	;
-; (HSTBUF), so that a physical disk read is not required. All that is then	;
-; required is for the BIOS to move the appropriate 128 bytes from the		;
-; HSTBUF into the buffer pointed at by the DMA address. Only during the READ;
-; function will the BIOS normally communicate with the physical disk drive, ;
-; selecting it and seeking to read the requested track and sector. During	;
-; this process, the READ function must also handle any hardware errors that ;
-; occur, trying an operation again if a "soft," or recoverable, error		;
-; occurs.																	;
-;	The READ function must return with the A register set to OOH if the read;
-; operation has completed successfully. If the READ function returns with	;
-; the A register set to 01 H, the BDOS will display an error message of the ;
-; form BDOS Err on X: Bad Sector. Under these circumstances, you have only	;
-; two choices. You can enter a CARRIAGE RETURN, ignore the fact that there	;
-; was an error, and attempt to make sense of the data in the DMA buffer. Or ;
-; you can type a CONTROL-C to abort the operation, perform a warm boot, and ;
-; return control to the CCP. As you can see, CP/M's error handling is not	;
-; particularly helpful, so most BIOS writers add more sophisticated error	;
-; recovery right in the disk driver. This can include some interaction with ;
-; the console so that a more determined effort can be made to correct errors;
-; or, if nothing else, give you more information as to what has gone wrong. ;
-;																			;
-;																			;
-;			Entry Point		:	BiosStart + (D *	3).	(27H)				;
-;			Entry Parameters:	None										;
-;			Exit Parameters :	A = 00H Successful Read						;
-;								A = 01H BDOS Err							;
-;===========================================================================;
+;===========================================================================
+;	READ			BIOS 0D
+;
+;	READ reads in a 128-byte sector provided that there have been previous
+; BIOS function calls to:
+;				- SELDSK	"select" the disk
+;				- SETDMA	set the DMA address
+;				- SETTRK	set the track number
+;				- SETSEC	set the sector number.
+;
+;	Because of the blocking/ deblocking code in the BIOS, there are frequent
+; occasions when the requested sector will already be in the host buffer
+; (HSTBUF), so that a physical disk read is not required. All that is then
+; required is for the BIOS to move the appropriate 128 bytes from the
+; HSTBUF into the buffer pointed at by the DMA address. Only during the READ
+; function will the BIOS normally communicate with the physical disk drive, 
+; selecting it and seeking to read the requested track and sector. During
+; this process, the READ function must also handle any hardware errors that 
+; occur, trying an operation again if a "soft," or recoverable, error
+; occurs.
+;	The READ function must return with the A register set to OOH if the read
+; operation has completed successfully. If the READ function returns with
+; the A register set to 01 H, the BDOS will display an error message of the 
+; form BDOS Err on X: Bad Sector. Under these circumstances, you have only
+; two choices. You can enter a CARRIAGE RETURN, ignore the fact that there
+; was an error, and attempt to make sense of the data in the DMA buffer. Or 
+; you can type a CONTROL-C to abort the operation, perform a warm boot, and 
+; return control to the CCP. As you can see, CP/M's error handling is not
+; particularly helpful, so most BIOS writers add more sophisticated error
+; recovery right in the disk driver. This can include some interaction with 
+; the console so that a more determined effort can be made to correct errors
+; or, if nothing else, give you more information as to what has gone wrong. 
+;
+;
+;			Entry Point		:	BiosStart + (D *	3).	(27H)
+;			Entry Parameters:	None
+;			Exit Parameters :	A = 00H Successful Read
+;								A = 01H BDOS Err
+;===========================================================================
 
 READ:
 	LD		A,DISK_READ
@@ -908,65 +908,65 @@ READ:
 	LD		(WriteType),A				;	to avoid a Directory Write later
 	JP		CommonDiskIO				; Use common code to execute read
 
-;===========================================================================;
-;	WRITE			BIOS 0E													;
-;																			;
-;	Write a cpmRecord,128-bytes, from the current DMA address to the		;
-; previously Selected disk, track, and sector.								;
-;																			;
-;	On arrival here, the BDOS will have set register C to indicate whether	;
-; this write operation is to:												;
-;	00H [WriteAllocated]	An already allocated allocation block			;
-;	01H [WriteDirectory]	To the directory								;
-;	02H [WriteCleanBuffer]	To the first cpmRecord of an Alocation block	;
-;																			;
-;	WRITE is similar to READ but with the obvious difference that data is	;
-; transferred from the DMA buffer to the specified 128-byte sector.Like READ;
-; this function requires that the following	calls have already been made:	;
-;	- SELDSK	"select" the disk											;
-;	- SETDMA	set the DMA address											;
-;	- SETTRK	set the track number										;
-;	- SETSEC	set the sector number.										;
-;																			;
-;	Again, it is only in the WRITE routine that the driver will start to talk;
-; directly to the physical hardware, selecting the disk unit, track, and	;
-; sector, and transferring the data to the disk. With the					;
-; blocking/deblocking code, the BDOS optimizes the number of disk writes	;
-; that are needed by indicating in register C the type of disk write that	;
-; is to be performed:														;
-;	0 = normal sector write													;
-;	1 = write to file directory sector										;
-;	2 = write to sector of previously unchanged Deblocking Buffer			;
-;																			;
-;	Type 0 occurs whenever the BDOS is writing to a data sector in an already;
-; used allocation block. Under these circumstances, the disk driver must	;
-; preread the appropriate host sector because there may be previously stored;
-; information on it.														;
-;																			;
-;	Type 1 occurs whenever the BDOS is writing to a file directory sector-in;
-; this case, the BIOS must not defer writing the sector to the disk, as the ;
-; information is too valuable to hold in memory until the HSTBUF is full.	;
-; The longer the information resides in the HSTBUF, the greater the chance	;
-; of a power failure or glitch, making file data already physically written ;
-; to the disk inaccessible because the file directory is out of date.		;
-;																			;
-;	Type 2 occurs whenever the BDOS needs to write to the first sector of a	;
-; previously unused allocation block. Unused, in this context, includes an	;
-; allocation block that has become available as a result of a file being	;
-; erased. In this case, there is no need for the disk driver to preread an	;
-; entire host-sized sector into the HSTBUF, as there is no data of value in ;
-; the physical sector.														;
-;																			;
-;	As with the READ routine, the WRITE function returns with A set to OOH if;
-; the operation has been completed successfully. If the WRITE function		;
-; returns with A set to 01H, then the BDOS will display the same message as ;
-; for READ: BDOS Err on X: Bad Sector										;
-;																			;
-;			Entry Point		:	BiosStart + (E *	3).	(2AH)				;
-;			Entry Parameters:	C = Write type								;
-;			Exit Parameters :	A = 00H Successful Read						;
-;								A = 01H BDOS Err							;
-;===========================================================================;
+;===========================================================================
+;	WRITE			BIOS 0E
+;
+;	Write a cpmRecord,128-bytes, from the current DMA address to the
+; previously Selected disk, track, and sector.
+;
+;	On arrival here, the BDOS will have set register C to indicate whether
+; this write operation is to:
+;	00H [WriteAllocated]	An already allocated allocation block
+;	01H [WriteDirectory]	To the directory
+;	02H [WriteCleanBuffer]	To the first cpmRecord of an Alocation block
+;
+;	WRITE is similar to READ but with the obvious difference that data is
+; transferred from the DMA buffer to the specified 128-byte sector.Like READ
+; this function requires that the following	calls have already been made:
+;	- SELDSK	"select" the disk
+;	- SETDMA	set the DMA address
+;	- SETTRK	set the track number
+;	- SETSEC	set the sector number.
+;
+;	Again, it is only in the WRITE routine that the driver will start to talk
+; directly to the physical hardware, selecting the disk unit, track, and
+; sector, and transferring the data to the disk. With the
+; blocking/deblocking code, the BDOS optimizes the number of disk writes
+; that are needed by indicating in register C the type of disk write that
+; is to be performed:
+;	0 = normal sector write
+;	1 = write to file directory sector
+;	2 = write to sector of previously unchanged Deblocking Buffer
+;
+;	Type 0 occurs whenever the BDOS is writing to a data sector in an already
+; used allocation block. Under these circumstances, the disk driver must
+; preread the appropriate host sector because there may be previously stored
+; information on it.
+;
+;	Type 1 occurs whenever the BDOS is writing to a file directory sector-in
+; this case, the BIOS must not defer writing the sector to the disk, as the 
+; information is too valuable to hold in memory until the HSTBUF is full.
+; The longer the information resides in the HSTBUF, the greater the chance
+; of a power failure or glitch, making file data already physically written 
+; to the disk inaccessible because the file directory is out of date.
+;
+;	Type 2 occurs whenever the BDOS needs to write to the first sector of a
+; previously unused allocation block. Unused, in this context, includes an
+; allocation block that has become available as a result of a file being
+; erased. In this case, there is no need for the disk driver to preread an
+; entire host-sized sector into the HSTBUF, as there is no data of value in 
+; the physical sector.
+;
+;	As with the READ routine, the WRITE function returns with A set to OOH if
+; the operation has been completed successfully. If the WRITE function
+; returns with A set to 01H, then the BDOS will display the same message as 
+; for READ: BDOS Err on X: Bad Sector
+;
+;			Entry Point		:	BiosStart + (E *	3).	(2AH)
+;			Entry Parameters:	C = Write type
+;			Exit Parameters :	A = 00H Successful Read
+;								A = 01H BDOS Err
+;===========================================================================
 
 WRITE:
 	LD		A,C							; Retrieve the calling write type
@@ -974,97 +974,97 @@ WRITE:
 	LD		A,DISK_WRITE
 	LD		(DiskCommand),A				; Set to Flag to Write
 
-;***************************************************************************;
-;	 Common code to execute both reads and writes of 128-byte records		;
-;***************************************************************************;
+;***************************************************************************
+;	 Common code to execute both reads and writes of 128-byte records
+;***************************************************************************
 CommonDiskIO:
 	XOR		A							; Assume no disk error will occur
 	LD		(DiskStatus),A
-;-------------------------Convert selected record into physical sector------;
-	LD		A,(SelectedRecord)												;
-	RRA									; Convert selected record into		;
-	RRA									;	physical sector by dividing by	;
-	AND		03FH						; Remove unwanted bits				;
-	LD		(SelectedSector),A												;
-;-------------------------Convert selected record into physical sector------;
+;-------------------------Convert selected record into physical sector------
+	LD		A,(SelectedRecord)
+	RRA									; Convert selected record into
+	RRA									;	physical sector by dividing by
+	AND		03FH						; Remove unwanted bits
+	LD		(SelectedSector),A
+;-------------------------Convert selected record into physical sector------
 
-;------------------------- Any Data in Buffer ------------------------------;
-;Flag is ONLY reset by BIOS HOME Function. otherwise it is set by all passes;
-;																			;
-	LD		HL,DataInBufferFlag			; See if there is any data here ?	;
-	LD		A,(HL)															;
-	LD		(HL),TRUE					; Force flag true					;
-	CP		TRUE						; Was	any data here ?				;
-	JR		NZ,PreRead					; No, then we need to load data		;
-;------------------------- Any Data in Buffer ------------------------------;
+;------------------------- Any Data in Buffer ------------------------------
+;Flag is ONLY reset by BIOS HOME Function. otherwise it is set by all passes
+;
+	LD		HL,DataInBufferFlag			; See if there is any data here ?
+	LD		A,(HL)
+	LD		(HL),TRUE					; Force flag true
+	CP		TRUE						; Was	any data here ?
+	JR		NZ,PreRead					; No, then we need to load data
+;------------------------- Any Data in Buffer ------------------------------
 
-;--------------------------- Is This My Data -------------------------------;
-	CALL	IsItMyData														;
-	JR		Z,DoPart2														;
-;--------------------------- Is This My Data -------------------------------;
+;--------------------------- Is This My Data -------------------------------
+	CALL	IsItMyData
+	JR		Z,DoPart2
+;--------------------------- Is This My Data -------------------------------
 
-;--------------------------- Is The Data Dirty -----------------------------;
-	LD		A,(DirtyBufferFlag)												;
-	CP		TRUE															;
-	JR		NZ,PreRead														;
-;--------------------------- Is The Data Dirty -----------------------------;
+;--------------------------- Is The Data Dirty -----------------------------
+	LD		A,(DirtyBufferFlag)
+	CP		TRUE
+	JR		NZ,PreRead
+;--------------------------- Is The Data Dirty -----------------------------
 
-;-------------------------------- PreWrite ---------------------------------;
-PreWrite:																	;
-; Do the actual Write														;
-	CALL	PhysicalWrite													;
-;-------------------------------- PreWrite ---------------------------------;
+;-------------------------------- PreWrite ---------------------------------
+PreWrite:
+; Do the actual Write
+	CALL	PhysicalWrite
+;-------------------------------- PreWrite ---------------------------------
 
-;--------------------------------- PreRead ---------------------------------;
-;	 prepare for physical IO												;
-PreRead:																	;
-; Set IOBuffer to Selected state for physical read							;
-	LD		HL,SelectedState												;
-	LD		DE,IOBufferState												;
-	LD		BC,SelectedStateSize											;
-	LDIR																	;
-; Do the actual read														;
-	CALL	PhysicalRead													;
-	LD		A,TRUE															;
-	LD		(DataInBufferFlag),A		; Set DataInBuffeer Flag			;
-	LD		A,FALSE															;
-	LD		(DirtyBufferFlag),A			; Reset DataIsDirty Flag			;
-;--------------------------------- PreRead ---------------------------------;
+;--------------------------------- PreRead ---------------------------------
+;	 prepare for physical IO
+PreRead:
+; Set IOBuffer to Selected state for physical read
+	LD		HL,SelectedState
+	LD		DE,IOBufferState
+	LD		BC,SelectedStateSize
+	LDIR
+; Do the actual read
+	CALL	PhysicalRead
+	LD		A,TRUE
+	LD		(DataInBufferFlag),A		; Set DataInBuffeer Flag
+	LD		A,FALSE
+	LD		(DirtyBufferFlag),A			; Reset DataIsDirty Flag
+;--------------------------------- PreRead ---------------------------------
 
-;-------------------Calculate the address of the record in the sector ------;
-DoPart2:																	;
-DataIsInBuffer:																;
-	LD		A,(SelectedRecord)												;
-	AND		SectorMask					; Want relative record				;
-	INC		A							; Adjust for DJNZ					;
-	LD		B,A																;
-	LD		DE,cpmRecordSize												;
-	LD		HL,-cpmRecordSize												;
-SectorInBuffer1:															;
-	ADD		HL,DE						; RecordNumber * recordSize			;
-	DJNZ	SectorInBuffer1				;	yields index into the Sector	;
-																			;
-	LD		DE,DiskBuffer				; Start of sector					;
-	ADD		HL,DE						; HL -> start of record in buffer	;
-	LD		DE,(DMAAddress)				; Callers	DMA Address				;
-																			;
-;-------------------Calculate the address of the record in the sector ------;
+;-------------------Calculate the address of the record in the sector ------
+DoPart2:
+DataIsInBuffer:
+	LD		A,(SelectedRecord)
+	AND		SectorMask					; Want relative record
+	INC		A							; Adjust for DJNZ
+	LD		B,A
+	LD		DE,cpmRecordSize
+	LD		HL,-cpmRecordSize
+SectorInBuffer1:
+	ADD		HL,DE						; RecordNumber * recordSize
+	DJNZ	SectorInBuffer1				;	yields index into the Sector
 
-;------------------------- Determine if its a Read or Write and set HL & DE ;
-	LD		A,(DiskCommand)				; 0 => Write, non Zero => Read		;
-	CP		DISK_READ														;
-	JP		Z,BufferMove				; Read : data from Buffer to DMA	;
-;write									; Write: data from DMA to Buffer	;
-	LD		A,TRUE						; Set the flag to indicate			;
-	LD		(DirtyBufferFlag),A		;	dirty buffer						;
-	EX		DE,HL						; Swap source and destn for Write	;
-;------------------------- Determine if its a Read or Write and set HL & DE ;
+	LD		DE,DiskBuffer				; Start of sector
+	ADD		HL,DE						; HL -> start of record in buffer
+	LD		DE,(DMAAddress)				; Callers	DMA Address
 
-;----------------------	Move the Data between Buffer and DMA location	---;
-BufferMove:																	;
-	LD		BC,cpmRecordSize												;
-	LDIR																	;
-;----------------------	Move the Data between Buffer and DMA location	----;
+;-------------------Calculate the address of the record in the sector ------
+
+;------------------------- Determine if its a Read or Write and set HL & DE 
+	LD		A,(DiskCommand)				; 0 => Write, non Zero => Read
+	CP		DISK_READ
+	JP		Z,BufferMove				; Read : data from Buffer to DMA
+;write									; Write: data from DMA to Buffer
+	LD		A,TRUE						; Set the flag to indicate
+	LD		(DirtyBufferFlag),A		;	dirty buffer
+	EX		DE,HL						; Swap source and destn for Write
+;------------------------- Determine if its a Read or Write and set HL & DE 
+
+;----------------------	Move the Data between Buffer and DMA location	---
+BufferMove:
+	LD		BC,cpmRecordSize
+	LDIR
+;----------------------	Move the Data between Buffer and DMA location	----
 
 
 	LD		A,(WriteType)				; Is this a write to the directory ?
@@ -1082,26 +1082,26 @@ BufferMove:																	;
 	RET
 
 
-;--------------------------- Is It My Data ---------------------------------;
-IsItMyData:																	;
-																			;
-	LD		HL,SelectedState												;
-	LD		DE,IOBufferState												;
-	LD		B,SelectedStateSize												;
-IsItMyData1:																;
-	LD		A,(DE)															;
-	XOR		(HL)						; (HL) =(DE)						;
-	RET		NZ							; If not we are done				;
-	INC		DE																;
-	INC		HL							; Lets look at the next bytes		;
-	DJNZ	IsItMyData1					; Loop if not exhausted the count	;
-	XOR		A							; Else set the Z flag				;
-	RET									;	and exit						;
-;--------------------------- Is It My Data ---------------------------------;
+;--------------------------- Is It My Data ---------------------------------
+IsItMyData:
 
-			;***********************************************;
-			;					Physical Disk IO					;
-			;***********************************************;
+	LD		HL,SelectedState
+	LD		DE,IOBufferState
+	LD		B,SelectedStateSize
+IsItMyData1:
+	LD		A,(DE)
+	XOR		(HL)						; (HL) =(DE)
+	RET		NZ							; If not we are done
+	INC		DE
+	INC		HL							; Lets look at the next bytes
+	DJNZ	IsItMyData1					; Loop if not exhausted the count
+	XOR		A							; Else set the Z flag
+	RET									;	and exit
+;--------------------------- Is It My Data ---------------------------------
+
+			;***********************************************
+			;					Physical Disk IO
+			;***********************************************
 
 ;Write contents of disk buffer to correct sector
 PhysicalWrite:
@@ -1113,62 +1113,62 @@ PhysicalRead:
 
 
 CommonPhysical:
-;--------------------------- Setup Disk Control Table	--------------------;
-																			;
-;Command																	;
-	LD		(DCTCommand),A				; set the command for Read or Write ;
-;Disk																		;
-	LD		A,(IOBufferDisk)												;
-	AND		03H							; only units 0 to 3					;
-	LD		(DCTDisk),A					; set disk							;
-;Track																		;
-	LD		HL,(IOBufferTrack)												;
-	LD		A,L																;
-	LD		(DCTTrack),A				; set track							;
-																			;
-;Head and Track	Calculations												;
-; The sector must be converted into a head number and sector number.		;
-;	Head = (int) Sector / SectorsPerHead									;
-;	Sector = Sector MOD SectorsPerHead										;
-DetermineHead:																;
-	LD		B,0							; Start at head 0					;
-	LD		HL,SelectedDskSecsPerHead	; Point at track counts				;
-	LD		A,(IOBufferSector)			; get target sector					;
-DetermineHead1:																;
-	CP		M							; Need another Head?				;
-	JP		C,HeadFound					; nope done with head calculation	;
-																			;
-	SUB		M							; subtract track value				;
-	INC		B							; Increment head					;
-	JP		DetermineHead1				; loop for next head value			;
-;Sector																		;
-HeadFound:								; Sector MOD SectorsPerHead			;
-	INC		A							; physical sectors start at 1		;
-	LD		(DCTSector),A				; set sector						;
-;Head																		;
-	LD		A,B																;
-	LD		(DCTHead),A					; set head number					;
-;Byte Count																	;
-	LD		HL,diskSectorSize												;
-	LD		(DCTByteCount),HL			; set byte count					;
-;DMA																		;
-	LD		HL,DiskBuffer													;
-	LD		(DCTDMAAddress),HL			; set transfer address				;
-																			;
-; Since only one control table is in use, close the status and				;
-; busy chain pointers ; back to the main control bytes.						;
-																			;
-;NextStatusBlock															;
-	LD		HL,DiskStatusLocation											;
-	LD		(DCTNextStatusBlock),HL											;
-;NextControlLocation														;
-	LD		HL,DiskControlByte												;
-	LD		(DCTNextControlLocation),HL										;
-	;																		;
-;Put	DCT pointer in page0												;
-	LD		HL,DCTCommand													;
-	LD		(DiskCommandBlock),HL											;
-;--------------------------- Setup Disk Control Table	---------------------;
+;--------------------------- Setup Disk Control Table	--------------------
+
+;Command
+	LD		(DCTCommand),A				; set the command for Read or Write 
+;Disk
+	LD		A,(IOBufferDisk)
+	AND		03H							; only units 0 to 3
+	LD		(DCTDisk),A					; set disk
+;Track
+	LD		HL,(IOBufferTrack)
+	LD		A,L
+	LD		(DCTTrack),A				; set track
+
+;Head and Track	Calculations
+; The sector must be converted into a head number and sector number.
+;	Head = (int) Sector / SectorsPerHead
+;	Sector = Sector MOD SectorsPerHead
+DetermineHead:
+	LD		B,0							; Start at head 0
+	LD		HL,SelectedDskSecsPerHead	; Point at track counts
+	LD		A,(IOBufferSector)			; get target sector
+DetermineHead1:
+	CP		M							; Need another Head?
+	JP		C,HeadFound					; nope done with head calculation
+
+	SUB		M							; subtract track value
+	INC		B							; Increment head
+	JP		DetermineHead1				; loop for next head value
+;Sector
+HeadFound:								; Sector MOD SectorsPerHead
+	INC		A							; physical sectors start at 1
+	LD		(DCTSector),A				; set sector
+;Head
+	LD		A,B
+	LD		(DCTHead),A					; set head number
+;Byte Count
+	LD		HL,diskSectorSize
+	LD		(DCTByteCount),HL			; set byte count
+;DMA
+	LD		HL,DiskBuffer
+	LD		(DCTDMAAddress),HL			; set transfer address
+
+; Since only one control table is in use, close the status and
+; busy chain pointers ; back to the main control bytes.
+
+;NextStatusBlock
+	LD		HL,DiskStatusLocation
+	LD		(DCTNextStatusBlock),HL
+;NextControlLocation
+	LD		HL,DiskControlByte
+	LD		(DCTNextControlLocation),HL
+	;
+;Put	DCT pointer in page0
+	LD		HL,DCTCommand
+	LD		(DiskCommandBlock),HL
+;--------------------------- Setup Disk Control Table	---------------------
 
 ; Make the IO happen
 	LD		HL,DiskControlByte			; Activate disk controller
@@ -1197,75 +1197,75 @@ DiskError:
 
  
 
-;===========================================================================;
-;																			;
-;	There is one	disk controller on this system,							;
-; for the 3.5 HD drive (1.44MB)												;
-;																			;
-; The controller is "hard-wired" to monitor memory location 0X45 to detect	;
-; when it is to perform some disk operation.	This is called its disk		;
-; control byte. If the most significant bit of	disk control byte is set,	;
-; the controller will look at the word following the respective control		;
-; bytes. This word must contain the address of	valid disk control table	;
-; that specifies the exact disk operation to be performed. Once the			;
-; operation has been completed. the controller resets its disk control byte ;
-; to OOH.	This indicates completion to the disk driver code.				;
-;																			;
-;	The controller also sets a return code in a disk status block,			;
-; location 0X43H. If the first byte of this status block is less than 80H.	;
-; then a disk error has occurred.											;
-																			;
-;	The disk control table layout is shown below. Note that the controller	;
-; has the capability	for control tables to be chained together so that a	;
-; sequence of disk operations can be initiated. In this BIOS this feature	;
-; is not used. However. the controller requires that the chain pointers		;
-; in the disk control tables be pointed back to the main control bytes in	;
-; order to indicate	the end of the chain									;
-;===========================================================================;
+;===========================================================================
+;
+;	There is one	disk controller on this system,
+; for the 3.5 HD drive (1.44MB)
+;
+; The controller is "hard-wired" to monitor memory location 0X45 to detect
+; when it is to perform some disk operation.	This is called its disk
+; control byte. If the most significant bit of	disk control byte is set,
+; the controller will look at the word following the respective control
+; bytes. This word must contain the address of	valid disk control table
+; that specifies the exact disk operation to be performed. Once the
+; operation has been completed. the controller resets its disk control byte 
+; to OOH.	This indicates completion to the disk driver code.
+;
+;	The controller also sets a return code in a disk status block,
+; location 0X43H. If the first byte of this status block is less than 80H.
+; then a disk error has occurred.
 
-;**************************** Disk ControlTable ****************************;
-DCTStart:																	;
-DCTCommand:				DB		00H		; Command							;
-DCTDisk:				DB		00H		; unit (drive) number = 0 or 1		;
-DCTHead:				DB		00H		; head number = 0 or 1				;
-DCTTrack:				DB		00H		; track number						;
-DCTSector:				DB		00H		; sector number						;
-DCTByteCount:			DW		0000H	; number of bytes to read/write		;
-DCTDMAAddress:			DW		0000H	; transfer address					;
-DCTNextStatusBlock:		DW		0000H	; pointer to next status block		;
-DCTNextControlLocation:	DW		0000H	; pointer to next control byte		;
-DCTEnd:																		;
-DCTSize					EQU		DCTEnd-DCTStart								;
-;**************************** Disk ControlTable ****************************;
+;	The disk control table layout is shown below. Note that the controller
+; has the capability	for control tables to be chained together so that a
+; sequence of disk operations can be initiated. In this BIOS this feature
+; is not used. However. the controller requires that the chain pointers
+; in the disk control tables be pointed back to the main control bytes in
+; order to indicate	the end of the chain
+;===========================================================================
 
-;**************************** Physical IO State ****************************;
-IOBufferState:																;
-IOBufferDisk:			DB		00H											;
-IOBufferTrack:			DW		0000H										;
-IOBufferSector:			DB		010H										;
-;**************************** Physical IO State ****************************;
+;**************************** Disk ControlTable ****************************
+DCTStart:
+DCTCommand:				DB		00H		; Command
+DCTDisk:				DB		00H		; unit (drive) number = 0 or 1
+DCTHead:				DB		00H		; head number = 0 or 1
+DCTTrack:				DB		00H		; track number
+DCTSector:				DB		00H		; sector number
+DCTByteCount:			DW		0000H	; number of bytes to read/write
+DCTDMAAddress:			DW		0000H	; transfer address
+DCTNextStatusBlock:		DW		0000H	; pointer to next status block
+DCTNextControlLocation:	DW		0000H	; pointer to next control byte
+DCTEnd:
+DCTSize					EQU		DCTEnd-DCTStart
+;**************************** Disk ControlTable ****************************
 
-;**************************** Buffer State *********************************;
-DataInBufferFlag:		DB		00H											;
-DirtyBufferFlag:		DB		00H											;
-;**************************** Buffer State *********************************;
+;**************************** Physical IO State ****************************
+IOBufferState:
+IOBufferDisk:			DB		00H
+IOBufferTrack:			DW		0000H
+IOBufferSector:			DB		010H
+;**************************** Physical IO State ****************************
 
-;**************************** Selected Record State ************************;
-;	 variables for selected disk, track and sector							;
-;These are moved and compared as a group with Physical IO State				;
-;. DO NOT ALTER;															;
-																			;
-SelectedState:																;
-SelectedDisk:			DB		00H											;
-SelectedTrack:			DW		0000H										;
-SelectedSector:			DB		00H		; (SelectedRecord/RecordsPerSector) ;
-SelectedStateEnd:															;
-SelectedStateSize		EQU		SelectedStateEnd - SelectedState			;
-																			;
-SelectedRecord:			DB		00H											;
-																			;
-SelectedDskSecsPerHead:	DB		00H		; Sectors / head					;
-;**************************** Selected Record State ************************;
+;**************************** Buffer State *********************************
+DataInBufferFlag:		DB		00H
+DirtyBufferFlag:		DB		00H
+;**************************** Buffer State *********************************
+
+;**************************** Selected Record State ************************
+;	 variables for selected disk, track and sector
+;These are moved and compared as a group with Physical IO State
+;. DO NOT ALTER;
+
+SelectedState:
+SelectedDisk:			DB		00H
+SelectedTrack:			DW		0000H
+SelectedSector:			DB		00H		; (SelectedRecord/RecordsPerSector) 
+SelectedStateEnd:
+SelectedStateSize		EQU		SelectedStateEnd - SelectedState
+
+SelectedRecord:			DB		00H
+
+SelectedDskSecsPerHead:	DB		00H		; Sectors / head
+;**************************** Selected Record State ************************
 
 DMAAddress:				DW		0000H	; Callers DMA address
 DiskStatus:				DB		00H		; Non-Zero - unrecoverable error
@@ -1275,101 +1275,101 @@ WriteType:				DB		00H		; The type of write set by BDOS
 ;============================================================================
 
 
-;*************************** Disk Definition Tables ************************;
-; These consists of disk parameter headers, with one entry per logical disk ;
-; drive, and disk parameter blocks, with either one parameter block per		;
-; logical disk or the same parameter block for several logical disks.		;
-DiskParameterHeaders:														;
-																			;
-; Logical Disk A: (3.25" HD 1.44MB Diskette)								;
-	DW		0000H						; No Skew table						;
-	DW		0000H						; Rel pos for file (0-3)			;
-	DW		0000H						; Last Selected Track #				;
-	DW		0000H						; Last Selected Sector #			;
-	DW		DirectoryBuffer				; all disks use this buffer			;
-	DW		ParameterBlock3HD			; specific to disk's parameters		;
-	DW		DiskAWorkArea													;
-	DW		DiskAAllocationVector											;
-																			;
-; Logical Disk B: (3.25" HD 1.44MB Diskette)								;
-	DW		0000H						; No Skew table						;
-	DW		0000H						; Rel pos for file (0-3)			;
-	DW		0000H						; Last Selected Track #				;
-	DW		0000H						; Last Selected Sector #			;
-	DW		DirectoryBuffer				; all disks use this buffer			;
-	DW		ParameterBlock3HD			; specific to disk's parameters		;
-	DW		DiskBWorkArea													;
-	DW		DiskBAllocationVector											;
-																			;
-; Logical Disk C: (3.25" HD 1.44MB Diskette)								;
-	DW		0000H						; No Skew table						;
-	DW		0000H						; Rel pos for file (0-3)			;
-	DW		0000H						; Last Selected Track #				;
-	DW		0000H						; Last Selected Sector #			;
-	DW		DirectoryBuffer				; all disks use this buffer			;
-	DW		ParameterBlock3HD			; specific to disk's parameters		;
-	DW		DiskCWorkArea													;
-	DW		DiskCAllocationVector											;
-																			;
-; Logical Disk D: (3.25" HD 1.44MB Diskette)								;
-	DW		0000H						; No Skew table						;
-	DW		0000H						; Rel pos for file (0-3)			;
-	DW		0000H						; Last Selected Track #				;
-	DW		0000H						; Last Selected Sector #			;
-	DW		DirectoryBuffer				; all disks use this buffer			;
-	DW		ParameterBlock3HD			; specific to disk's parameters		;
-	DW		DiskDWorkArea													;
-	DW		DiskDAllocationVector											;
-;*************************** Disk Definition Tables ************************;
+;*************************** Disk Definition Tables ************************
+; These consists of disk parameter headers, with one entry per logical disk 
+; drive, and disk parameter blocks, with either one parameter block per
+; logical disk or the same parameter block for several logical disks.
+DiskParameterHeaders:
+
+; Logical Disk A: (3.25" HD 1.44MB Diskette)
+	DW		0000H						; No Skew table
+	DW		0000H						; Rel pos for file (0-3)
+	DW		0000H						; Last Selected Track #
+	DW		0000H						; Last Selected Sector #
+	DW		DirectoryBuffer				; all disks use this buffer
+	DW		ParameterBlock3HD			; specific to disk's parameters
+	DW		DiskAWorkArea
+	DW		DiskAAllocationVector
+
+; Logical Disk B: (3.25" HD 1.44MB Diskette)
+	DW		0000H						; No Skew table
+	DW		0000H						; Rel pos for file (0-3)
+	DW		0000H						; Last Selected Track #
+	DW		0000H						; Last Selected Sector #
+	DW		DirectoryBuffer				; all disks use this buffer
+	DW		ParameterBlock3HD			; specific to disk's parameters
+	DW		DiskBWorkArea
+	DW		DiskBAllocationVector
+
+; Logical Disk C: (3.25" HD 1.44MB Diskette)
+	DW		0000H						; No Skew table
+	DW		0000H						; Rel pos for file (0-3)
+	DW		0000H						; Last Selected Track #
+	DW		0000H						; Last Selected Sector #
+	DW		DirectoryBuffer				; all disks use this buffer
+	DW		ParameterBlock3HD			; specific to disk's parameters
+	DW		DiskCWorkArea
+	DW		DiskCAllocationVector
+
+; Logical Disk D: (3.25" HD 1.44MB Diskette)
+	DW		0000H						; No Skew table
+	DW		0000H						; Rel pos for file (0-3)
+	DW		0000H						; Last Selected Track #
+	DW		0000H						; Last Selected Sector #
+	DW		DirectoryBuffer				; all disks use this buffer
+	DW		ParameterBlock3HD			; specific to disk's parameters
+	DW		DiskDWorkArea
+	DW		DiskDAllocationVector
+;*************************** Disk Definition Tables ************************
 
 
 ;-----------------------------------------------------------
-;******** Parameter Block for 3.5 Inch High Density 1.44 MB Diskettes ******;
-																			;
-ParameterBlock3HD:															;
-	DW		dpb3hdSPT					; cpmRecords per track- (144)		;
-	DB		dpb3hdBSH					; Block shift ( 4=> 2K)				;
-	DB		dpb3hdBLM					; Block mask						;
-	DB		dpb3hdEXM					; Extent mask						;
-	DW		dpb3hdDSM					; Max allocation block number (710) ;
-	DW		dpb3hdDRM					; Max directory entries - 1 (127)	;
-	DB		dpb3hdAL0					; Bit map for reserving allocation	;
-	DB		dpb3hdAL1					;	blocks for file directory		;
-	DW		dpb3hdCKS					; Disk change work area size (32)	;
-	DW		dpb3hdOFF					; Number of tracks before directory ;
-																			;
-	DB		(dpb3hdSPT/4)/dpb3hdNOH		; number of Sectors/Head			;
-;******** Parameter Block for 3.5 Inch High Density 1.44 MB Diskettes ******;
+;******** Parameter Block for 3.5 Inch High Density 1.44 MB Diskettes ******
 
-;**************************** Disk Work Area *******************************;
-; This is used by the BDOS to detect any unexpected	change of diskette.	;
-; The BDOS will	set such a changed diskette to read-only status.			;
-																			;
-DiskAWorkArea:	DS	dpb3hdCKS			; A:	020H						;
-DiskBWorkArea:	DS	dpb3hdCKS			; B:	020H						;
-DiskCWorkArea:	DS	dpb3hdCKS			; C:	020H						;
-DiskDWorkArea:	DS	dpb3hdCKS			; D:	020H						;
-;**************************** Disk Work Area *******************************;
+ParameterBlock3HD:
+	DW		dpb3hdSPT					; cpmRecords per track- (144)
+	DB		dpb3hdBSH					; Block shift ( 4=> 2K)
+	DB		dpb3hdBLM					; Block mask
+	DB		dpb3hdEXM					; Extent mask
+	DW		dpb3hdDSM					; Max allocation block number (710) 
+	DW		dpb3hdDRM					; Max directory entries - 1 (127)
+	DB		dpb3hdAL0					; Bit map for reserving allocation
+	DB		dpb3hdAL1					;	blocks for file directory
+	DW		dpb3hdCKS					; Disk change work area size (32)
+	DW		dpb3hdOFF					; Number of tracks before directory 
 
-;************************ Disk Allocation Vectors **************************;
-; These are used by the BDOS to maintain a bit map of which allocation		;
-; blocks are used and which are free. One byte is used for eight allocation ;
-; blocks,hence the	expression of the form	(allocation blocks/8)+1			;
-																			;
-DiskAAllocationVector:	DS	(dpb3hdDSM/8)+1 ; A:							;
-DiskBAllocationVector:	DS	(dpb3hdDSM/8)+1 ; B:							;
-																			;
-DiskCAllocationVector:	DS	(dpb3hdDSM/8)+1 ; C:							;
-DiskDAllocationVector:	DS	(dpb3hdDSM/8)+1 ; D:							;
-;************************ Disk Allocation Vectors **************************;
+	DB		(dpb3hdSPT/4)/dpb3hdNOH		; number of Sectors/Head
+;******** Parameter Block for 3.5 Inch High Density 1.44 MB Diskettes ******
 
-;********************************* Buffers **********************************;
-DirectoryBuffer:	DS		DirBuffSize										 ;
-																			 ;
-																			 ;
-DiskBuffer:																	 ;
-	DS		diskSectorSize													 ;
-;********************************* Buffers **********************************;
+;**************************** Disk Work Area *******************************
+; This is used by the BDOS to detect any unexpected	change of diskette.
+; The BDOS will	set such a changed diskette to read-only status.
+
+DiskAWorkArea:	DS	dpb3hdCKS			; A:	020H
+DiskBWorkArea:	DS	dpb3hdCKS			; B:	020H
+DiskCWorkArea:	DS	dpb3hdCKS			; C:	020H
+DiskDWorkArea:	DS	dpb3hdCKS			; D:	020H
+;**************************** Disk Work Area *******************************
+
+;************************ Disk Allocation Vectors **************************
+; These are used by the BDOS to maintain a bit map of which allocation
+; blocks are used and which are free. One byte is used for eight allocation 
+; blocks,hence the	expression of the form	(allocation blocks/8)+1
+
+DiskAAllocationVector:	DS	(dpb3hdDSM/8)+1 ; A:
+DiskBAllocationVector:	DS	(dpb3hdDSM/8)+1 ; B:
+
+DiskCAllocationVector:	DS	(dpb3hdDSM/8)+1 ; C:
+DiskDAllocationVector:	DS	(dpb3hdDSM/8)+1 ; D:
+;************************ Disk Allocation Vectors **************************
+
+;********************************* Buffers **********************************
+DirectoryBuffer:	DS		DirBuffSize										 
+																			 
+																			 
+DiskBuffer:																	 
+	DS		diskSectorSize													 
+;********************************* Buffers **********************************
 
 Z_HighestLocation:
 Z_MemoryLeft			EQU	0FFFFH - Z_HighestLocation
